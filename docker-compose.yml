@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  voip_analyzer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8501:8501"
+    restart: always
+    volumes:
+      # Mapeia o diretório de trabalho para persistência de dados, se necessário
+      # Remova ou comente esta linha se não houver necessidade de persistência
+      - ./data:/app/data

@@ -31,12 +31,12 @@ Medido: um pcap de 27 MB (120 mil pacotes, 60 chamadas) leva ~4 s e usa ~180 MB 
 
 1. Crie conta em railway.com e conecte o GitHub.
 2. **New Project → Deploy from GitHub repo → Rashnekami/Sip-network**.
-3. Em **Settings → Build**, mude o Dockerfile para `Dockerfile.api` (ou crie a variável `RAILWAY_DOCKERFILE_PATH=Dockerfile.api`).
+3. O arquivo `railway.toml` do repositório já manda o Railway usar o `Dockerfile.api` e checar `/health`. Não precisa mexer no build.
 4. Em **Variables**, adicione `SIP_NETWORK_API_TOKEN`.
 5. Em **Settings → Networking**, clique em **Generate Domain**. Você recebe algo como `https://sip-network-production.up.railway.app`.
 6. Teste: abra `https://SEU-DOMINIO/health`. Deve responder `{"status":"ok",...}`.
 
-Cada push na branch principal publica de novo sozinho. É cobrado por uso, com plano de entrada em torno de US$ 5/mês (confira o valor atual no site).
+Cada push na branch principal publica de novo sozinho. O plano Hobby custa US$ 5/mês e inclui US$ 5 de uso. A cobrança é pelo que a API usa de fato: parada ela ocupa poucas dezenas de MB, então o uso normal fica dentro dos US$ 5. Em **Workspace → Usage** dá para definir um limite de gasto.
 
 ## Opção B: Render
 

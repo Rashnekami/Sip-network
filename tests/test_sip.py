@@ -19,7 +19,7 @@ class SipTests(unittest.TestCase):
             p(2,2,msg("SIP/2.0 200 OK",cseq="1 REGISTER"),src="10.0.0.2",dst="10.0.0.1"),
         ]
         calls=build_calls(extract_sip_messages(packets))
-        self.assertFalse(calls[0].missing_ack)
+        self.assertEqual(calls, [])  # REGISTER is not a call; it is reported under registrations
 
     def test_invite_200_without_ack_is_flagged(self):
         packets = [

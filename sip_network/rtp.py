@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import statistics
 import struct
 from collections import defaultdict
@@ -10,6 +9,8 @@ from .emodel import estimate_mos
 from .models import Packet, RtpPacket, RtpStream, SipCall
 from .rtcp import looks_like_rtcp, parse_rtcp_reports
 from .sdp import STATIC_AUDIO
+
+DTMF_SYMBOLS = {i: str(i) for i in range(10)} | {10: "*", 11: "#", 12: "A", 13: "B", 14: "C", 15: "D", 16: "F"}
 
 
 @dataclass(slots=True)
@@ -128,7 +129,7 @@ def _infer_clock_rate(pkts: list[RtpPacket]) -> int:
     return min(candidates, key=lambda x: abs(x - med))
 
 
-def analyze_rtp(packets: list[Packet], calls: list[SipCall]) -> list[RtpStream]:
+def analyze_rtp(packets: list[Packet], calls: list[SipCall], gap_threshold_ms: float = 500.0) -> list[RtpStream]:
     candidates: dict[tuple, list[tuple[Packet, ParsedRtp]]] = defaultdict(list)
     for p in packets:
         if p.protocol != "UDP" or not p.payload:
@@ -140,9 +141,14 @@ def analyze_rtp(packets: list[Packet], calls: list[SipCall]) -> list[RtpStream]:
 
     reports = parse_rtcp_reports(packets)
     report_rtts: dict[int, list[float]] = defaultdict(list)
+    last_report: dict[int, object] = {}
     for rr in reports:
         if rr.rtt_ms is not None:
             report_rtts[rr.source_ssrc].append(rr.rtt_ms)
+        last_report[rr.source_ssrc] = rr
+    ssrcs_per_flow: dict[tuple, set[int]] = defaultdict(set)
+    for key in candidates:
+        ssrcs_per_flow[key[:4]].add(key[4])
 
     calls_by_id = {c.call_id: c for c in calls}
     streams: list[RtpStream] = []
@@ -210,7 +216,9 @@ def analyze_rtp(packets: list[Packet], calls: list[SipCall]) -> list[RtpStream]:
             inferred_ptime = statistics.median(ts_deltas)
         ptime = signaled_ptime or inferred_ptime
 
-        dtmf_events = []
+        # RFC 4733: every packet of one key press shares the RTP timestamp, so count events per timestamp.
+        dtmf_events: list[int] = []
+        seen_event_ts: set[int] = set()
         for p, r in rows:
             is_telephone_event = False
             if call:
@@ -218,15 +226,38 @@ def analyze_rtp(packets: list[Packet], calls: list[SipCall]) -> list[RtpStream]:
                     c = ep.get("codecs", {}).get(r.payload_type) or ep.get("codecs", {}).get(str(r.payload_type))
                     if c and str(c.get("name", "")).upper() == "TELEPHONE-EVENT":
                         is_telephone_event = True; break
-            if is_telephone_event and len(r.raw_payload) >= 4:
-                event = r.raw_payload[0]
-                if event not in dtmf_events: dtmf_events.append(event)
+            if is_telephone_event and len(r.raw_payload) >= 4 and r.timestamp not in seen_event_ts:
+                seen_event_ts.add(r.timestamp)
+                dtmf_events.append(r.raw_payload[0])
+        dtmf_digits = "".join(DTMF_SYMBOLS.get(e, "?") for e in dtmf_events)
 
         burst = _burst_ratio(ext_seqs)
         rtts = report_rtts.get(first_r.ssrc, [])
         rtt = statistics.median(rtts) if rtts else None
         one_way = rtt / 2.0 if rtt is not None else None
         mos, rf, note = estimate_mos(codec, loss_pct, burst, one_way)
+
+        dscp_values: dict[int, int] = defaultdict(int)
+        for p, _r in rows:
+            if p.dscp is not None:
+                dscp_values[p.dscp] += 1
+        dscp = max(dscp_values, key=dscp_values.get) if dscp_values else None
+        gaps_over = sum(1 for g in gaps_ms if g >= gap_threshold_ms)
+        cn_packets = sum(1 for _p, r in rows if r.payload_type == 13 or _codec_for(call, r.payload_type)[0] == "CN")
+        unexpected: list[int] = []
+        dest_match = None
+        if call and call.media_endpoints:
+            offered = {pt for ep in call.media_endpoints for pt in ep.get("payload_types", [])}
+            unexpected = sorted({r.payload_type for _p, r in rows} - offered)
+            # Only judge the destination when both offer and answer were captured.
+            if len({ep.get("side") for ep in call.media_endpoints}) >= 2:
+                dest_match = any(ep.get("ip") == first_p.dst_ip and ep.get("port") == first_p.dst_port for ep in call.media_endpoints)
+        rep = last_report.get(first_r.ssrc)
+        remote_loss = remote_cum = remote_jitter = None
+        if rep is not None:
+            remote_loss = round(rep.fraction_lost, 2)
+            remote_cum = rep.cumulative_lost
+            remote_jitter = round(rep.jitter * 1000.0 / clock_rate, 2) if clock_rate else None
 
         idx += 1
         streams.append(RtpStream(
@@ -237,7 +268,13 @@ def analyze_rtp(packets: list[Packet], calls: list[SipCall]) -> list[RtpStream]:
             loss_percent=round(loss_pct, 3), duplicates=duplicates, out_of_order=ooo,
             jitter_ms=round(jitter_ms, 3), max_interarrival_gap_ms=round(max_gap, 3), duration_s=round(duration, 3),
             bitrate_kbps=round(bitrate, 2), ptime_ms=round(ptime, 2) if ptime else None,
-            burst_ratio=round(burst, 3), dtmf_events=dtmf_events,
+            burst_ratio=round(burst, 3), dtmf_events=dtmf_events, dtmf_digits=dtmf_digits,
             rtt_ms=round(rtt, 2) if rtt is not None else None, mos=mos, r_factor=rf, mos_note=note,
+            dscp=dscp, dscp_values=dict(dscp_values),
+            first_packet_at=rtp_packets[0].timestamp, last_packet_at=rtp_packets[-1].timestamp,
+            gaps_over_threshold=gaps_over, comfort_noise_packets=cn_packets,
+            unexpected_payload_types=unexpected, ssrc_changes_on_flow=len(ssrcs_per_flow[key[:4]]) - 1,
+            rtcp_remote_loss_pct=remote_loss, rtcp_remote_cumulative_lost=remote_cum,
+            rtcp_remote_jitter_ms=remote_jitter, sdp_destination_match=dest_match,
         ))
     return streams

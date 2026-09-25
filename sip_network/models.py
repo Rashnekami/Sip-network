@@ -25,6 +25,9 @@ class Packet:
     tcp_flags: Optional[int] = None
     icmp_type: Optional[int] = None
     icmp_code: Optional[int] = None
+    dscp: Optional[int] = None
+    # (key, byte_offset, more_fragments, l4_bytes, l4_proto) while an IP fragment is pending reassembly.
+    frag_info: Optional[tuple[Any, int, bool, bytes, int]] = None
     parse_notes: tuple[str, ...] = ()
 
     def flow4(self) -> tuple[Any, ...]:
@@ -94,6 +97,11 @@ class SipMessage:
     body: str = ""
     sdp: Optional[SdpSession] = None
     raw_headers: dict[str, list[str]] = field(default_factory=dict)
+    dscp: Optional[int] = None
+
+    def header(self, name: str) -> Optional[str]:
+        vals = self.raw_headers.get(name.lower())
+        return vals[0] if vals else None
 
 
 @dataclass(slots=True)
@@ -116,6 +124,37 @@ class SipCall:
     termination_observed: bool
     retransmissions: int
     media_endpoints: list[dict[str, Any]] = field(default_factory=list)
+    # Outcome and NOC timings.
+    outcome: str = "unknown"
+    caller_ip: Optional[str] = None
+    callee_ip: Optional[str] = None
+    pdd_ms: Optional[float] = None
+    setup_time_ms: Optional[float] = None
+    ring_time_ms: Optional[float] = None
+    trying_ms: Optional[float] = None
+    duration_s: Optional[float] = None
+    disconnect_side: Optional[str] = None
+    disconnect_method: Optional[str] = None
+    q850_cause: Optional[int] = None
+    q850_text: Optional[str] = None
+    reason_header: Optional[str] = None
+    auth_challenges: int = 0
+    invite_attempts: int = 0
+    no_response: bool = False
+    # Dialog model (RFC 3261 sec. 12): one entry per remote tag that answered.
+    dialogs: list[dict[str, Any]] = field(default_factory=list)
+    forked: bool = False
+    early_dialogs: int = 0
+    reinvites: int = 0
+    hold_events: list[dict[str, Any]] = field(default_factory=list)
+    transfers: list[dict[str, Any]] = field(default_factory=list)
+    caller_user_agent: Optional[str] = None
+    callee_user_agent: Optional[str] = None
+    p_asserted_identity: Optional[str] = None
+    diversion: Optional[str] = None
+    negotiated_codecs: list[str] = field(default_factory=list)
+    unanswered_ack_dialogs: list[str] = field(default_factory=list)
+    session_expires: Optional[int] = None
 
     @property
     def connected(self) -> bool:
@@ -166,10 +205,23 @@ class RtpStream:
     ptime_ms: Optional[float]
     burst_ratio: float
     dtmf_events: list[int] = field(default_factory=list)
+    dtmf_digits: str = ""
     rtt_ms: Optional[float] = None
     mos: Optional[float] = None
     r_factor: Optional[float] = None
     mos_note: Optional[str] = None
+    dscp: Optional[int] = None
+    dscp_values: dict[int, int] = field(default_factory=dict)
+    first_packet_at: Optional[float] = None
+    last_packet_at: Optional[float] = None
+    gaps_over_threshold: int = 0
+    comfort_noise_packets: int = 0
+    unexpected_payload_types: list[int] = field(default_factory=list)
+    ssrc_changes_on_flow: int = 0
+    rtcp_remote_loss_pct: Optional[float] = None
+    rtcp_remote_cumulative_lost: Optional[int] = None
+    rtcp_remote_jitter_ms: Optional[float] = None
+    sdp_destination_match: Optional[bool] = None
 
 
 @dataclass(slots=True)
@@ -192,11 +244,21 @@ class AnalysisResult:
     diagnostics: list[Diagnostic]
     network_flows: list[dict[str, Any]]
     security: list[dict[str, Any]]
+    kpis: dict[str, Any] = field(default_factory=dict)
+    registrations: list[dict[str, Any]] = field(default_factory=list)
+    schema_version: str = "2.1"
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, include_messages: bool = True) -> dict[str, Any]:
+        calls = [asdict(x) for x in self.calls]
+        if not include_messages:
+            for c in calls:
+                c["messages"] = [{k: m[k] for k in ("packet_number", "timestamp", "src_ip", "src_port", "dst_ip", "dst_port", "start_line", "cseq_number", "cseq_method")} for m in c["messages"]]
         return {
+            "schema_version": self.schema_version,
             "capture": self.capture,
-            "calls": [asdict(x) for x in self.calls],
+            "kpis": self.kpis,
+            "registrations": self.registrations,
+            "calls": calls,
             "rtp_streams": [asdict(x) for x in self.rtp_streams],
             "diagnostics": [asdict(x) for x in self.diagnostics],
             "network_flows": self.network_flows,

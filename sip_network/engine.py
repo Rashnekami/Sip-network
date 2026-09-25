@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 from .capture import read_capture
+from .config import DEFAULT_THRESHOLDS, Thresholds
 from .diagnostics import diagnose
+from .kpi import compute_kpis
 from .models import AnalysisResult
-from .network import analyze_network, analyze_sip_security
+from .network import analyze_icmp_errors, analyze_network
+from .registrations import analyze_registrations, request_transactions
 from .rtp import analyze_rtp
+from .security import analyze_sip_security
 from .sip import build_calls, extract_sip_messages
 
 
-def analyze_bytes(data: bytes, filename: str = "capture") -> AnalysisResult:
+def analyze_bytes(data: bytes, filename: str = "capture", thresholds: Thresholds = DEFAULT_THRESHOLDS) -> AnalysisResult:
+    """Analyse a PCAP/PCAPNG capture held in memory. This is the stable entry point for integrations."""
     packets = read_capture(data)
     if not packets:
         raise ValueError("A captura não contém pacotes decodificáveis.")
@@ -17,10 +22,15 @@ def analyze_bytes(data: bytes, filename: str = "capture") -> AnalysisResult:
     capture_end = max(timestamps) if timestamps else 0.0
     sip_messages = extract_sip_messages(packets)
     calls = build_calls(sip_messages, capture_end)
-    streams = analyze_rtp(packets, calls)
-    diagnostics = diagnose(calls, streams)
+    streams = analyze_rtp(packets, calls, thresholds.rtp_gap_ms)
+    transactions = request_transactions(sip_messages)
+    registrations = analyze_registrations(sip_messages)
+    security = analyze_sip_security(sip_messages, transactions, calls, thresholds)
+    icmp_errors = analyze_icmp_errors(packets)
+    diagnostics = diagnose(calls, streams, thresholds, capture_end, security, icmp_errors, registrations)
     network = analyze_network(packets)
-    security = analyze_sip_security(sip_messages)
+    kpis = compute_kpis(calls, streams, sip_messages, registrations)
+    kpis["icmp_errors"] = icmp_errors
     notes = sorted({note for p in packets for note in p.parse_notes})
     return AnalysisResult(
         capture={
@@ -40,5 +50,11 @@ def analyze_bytes(data: bytes, filename: str = "capture") -> AnalysisResult:
             "parse_notes": notes[:30],
         },
         calls=calls, rtp_streams=streams, diagnostics=diagnostics,
-        network_flows=network, security=security,
+        network_flows=network, security=security, kpis=kpis, registrations=registrations,
     )
+
+
+def analyze_file(path: str, thresholds: Thresholds = DEFAULT_THRESHOLDS) -> AnalysisResult:
+    with open(path, "rb") as f:
+        data = f.read()
+    return analyze_bytes(data, path.rsplit("/", 1)[-1], thresholds)

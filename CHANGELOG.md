@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.1.0
+
+Evolução para uso em NOC de operadoras VoIP (módulo do checktecnico).
+
+### Corrigido
+
+- INVITE desafiado com 401/407 e reenviado não é mais classificado como falha: o resultado vem do último INVITE.
+- 487 após CANCEL é chamada cancelada, não falha crítica.
+- ACK ausente é verificado por diálogo (to-tag), cobrindo forking.
+- REGISTER/OPTIONS não aparecem mais como "chamadas".
+- INVITE com SDP grande fragmentado em UDP era analisado truncado.
+
+### Adicionado
+
+- Remontagem de fragmentos IPv4 e IPv6; DSCP por pacote.
+- Modelo de diálogo: forking, re-INVITE, hold/resume, REFER, desafios de autenticação.
+- Desfecho da chamada, PDD, setup, ring, duração, lado que desligou e causa Q.850 (Reason ou RFC 3398).
+- KPIs: ASR, NER, SER, SEER, ISA, ACD, PDD médio/p95, por tronco e por destino com falha.
+- Registros por AOR, e segurança: scanners, força bruta, enumeração de ramais, varredura OPTIONS e fraude internacional.
+- Diagnósticos: queda em ~32s por ACK, session timer, PDD alto, INVITE sem resposta, RTP após BYE, áudio atrasado,
+  gaps, PT não negociado, RTP fora do SDP, troca de SSRC, perda remota por RTCP, DSCP, ICMP inalcançável.
+- DTMF por dígito (RFC 4733).
+- `Thresholds` configuráveis, `analyze_file`, `to_dict(include_messages=False)` e `schema_version`.
+- Ladder SVG reutilizável, abas de KPI e registros e cache no Streamlit.
+- CLI `--summary`, `--no-messages` e `--fail-on`.
+- Motor sem dependências externas (UI como extra `.[ui]`), CI no GitHub Actions e 29 testes com cenários completos.
+
 ## 2.0.0
 
 Reescrita técnica do conceito Sip-Network com foco em diagnóstico defensável.

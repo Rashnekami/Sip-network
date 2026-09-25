@@ -23,14 +23,78 @@ LINK_LOOPBACK = 108
 LINK_NULL = 0
 
 
+L4_NAMES = {6: "TCP", 17: "UDP", 1: "ICMP", 58: "ICMPV6"}
+FRAGMENT_TIMEOUT_S = 30.0
+
+
 def read_capture(data: bytes) -> list[Packet]:
     if len(data) < 4:
         return []
     if data[:4] in PCAP_MAGIC:
-        return list(_read_pcap(io.BytesIO(data)))
+        return reassemble_fragments(list(_read_pcap(io.BytesIO(data))))
     if data[:4] == b"\x0a\x0d\x0d\x0a":
-        return list(_read_pcapng(io.BytesIO(data)))
+        return reassemble_fragments(list(_read_pcapng(io.BytesIO(data))))
     raise ValueError("Formato não reconhecido. Envie um arquivo PCAP ou PCAPNG válido.")
+
+
+def reassemble_fragments(packets: list[Packet]) -> list[Packet]:
+    """Rebuild IPv4/IPv6 datagrams split into fragments.
+
+    Like Wireshark, the reassembled datagram is reported on the packet carrying
+    the last fragment to arrive. The other fragments stay in the list (they
+    count as traffic) but carry no L4 payload, so SIP/RTP is never parsed twice.
+    Incomplete datagrams fall back to decoding the first fragment as-is.
+    """
+    pending: dict[tuple, list[int]] = {}
+    for i, p in enumerate(packets):
+        if p.frag_info is None:
+            continue
+        key = p.frag_info[0]
+        idxs = pending.setdefault(key, [])
+        if idxs and p.timestamp - packets[idxs[0]].timestamp > FRAGMENT_TIMEOUT_S:
+            idxs.clear()  # identification reused after timeout: start a new datagram
+        idxs.append(i)
+        data = _try_assemble([packets[j].frag_info for j in idxs])
+        if data is None:
+            continue
+        proto = p.frag_info[4]
+        whole = _decode_l4(proto, data, replace(p, frag_info=None, fragmented=True,
+                                                parse_notes=(f"datagrama remontado de {len(idxs)} fragmentos",)))
+        packets[i] = whole
+        for j in idxs:
+            if j != i:
+                packets[j] = replace(packets[j], frag_info=None, payload=b"", src_port=None, dst_port=None,
+                                     parse_notes=(f"fragmento remontado no pacote {p.number}",))
+        del pending[key]
+
+    for idxs in pending.values():
+        for j in idxs:
+            fi = packets[j].frag_info
+            if fi and fi[1] == 0:
+                partial = _decode_l4(fi[4], fi[3], replace(packets[j], frag_info=None,
+                                                          parse_notes=("fragmento IP sem remontagem completa",)))
+                packets[j] = partial
+            else:
+                packets[j] = replace(packets[j], frag_info=None,
+                                     parse_notes=("fragmento IP sem remontagem completa",))
+    return packets
+
+
+def _try_assemble(frags: list) -> bytes | None:
+    last = [f for f in frags if not f[2]]
+    if not last:
+        return None
+    total = last[0][1] + len(last[0][3])
+    buf = bytearray(total)
+    covered = [False] * total
+    for _key, off, _more, chunk, _proto in frags:
+        end = min(total, off + len(chunk))
+        buf[off:end] = chunk[: end - off]
+        for k in range(off, end):
+            covered[k] = True
+    if not all(covered):
+        return None
+    return bytes(buf)
 
 
 def _read_pcap(f: BinaryIO) -> Iterator[Packet]:
@@ -223,9 +287,11 @@ def _decode_ipv4(data: bytes, base: Packet) -> Packet:
     more_frags = bool(flags_frag & 0x2000)
     fragmented = more_frags or frag_offset != 0
     l4 = data[ihl: min(total_len or len(data), len(data))]
-    base = replace(base, src_ip=src, dst_ip=dst, ip_version=4, fragmented=fragmented)
-    if frag_offset != 0:
-        return replace(base, protocol={6: "TCP", 17: "UDP", 1: "ICMP"}.get(proto, f"IP:{proto}"), parse_notes=("fragmento IPv4 não inicial",))
+    base = replace(base, src_ip=src, dst_ip=dst, ip_version=4, fragmented=fragmented, dscp=data[1] >> 2)
+    if fragmented:
+        ident = struct.unpack("!H", data[4:6])[0]
+        return replace(base, protocol=L4_NAMES.get(proto, f"IP:{proto}"),
+                       frag_info=((4, src, dst, ident, proto), frag_offset * 8, more_frags, l4, proto))
     return _decode_l4(proto, l4, base)
 
 
@@ -233,11 +299,15 @@ def _decode_ipv6(data: bytes, base: Packet) -> Packet:
     if len(data) < 40:
         return replace(base, ip_version=6, parse_notes=("IPv6 truncado",))
     next_header = data[6]
+    traffic_class = ((data[0] & 0x0F) << 4) | (data[1] >> 4)
+    payload_len = struct.unpack("!H", data[4:6])[0]
+    if payload_len and 40 + payload_len < len(data):
+        data = data[:40 + payload_len]
     src = str(ipaddress.ip_address(data[8:24]))
     dst = str(ipaddress.ip_address(data[24:40]))
     pos = 40
     fragmented = False
-    non_initial_fragment = False
+    frag = None
     for _ in range(12):
         if next_header in (0, 43, 60):  # HBH, routing, destination options
             if len(data) < pos + 2:
@@ -251,10 +321,12 @@ def _decode_ipv6(data: bytes, base: Packet) -> Packet:
                 break
             nh = data[pos]
             frag_field = struct.unpack("!H", data[pos + 2:pos + 4])[0]
+            ident = struct.unpack("!I", data[pos + 4:pos + 8])[0]
             fragmented = True
-            non_initial_fragment = ((frag_field >> 3) & 0x1FFF) != 0
+            frag = (ident, ((frag_field >> 3) & 0x1FFF) * 8, bool(frag_field & 1))
             next_header = nh
             pos += 8
+            break  # headers after the fragment header belong to the fragmentable part
         elif next_header == 51:  # AH
             if len(data) < pos + 2:
                 break
@@ -264,9 +336,11 @@ def _decode_ipv6(data: bytes, base: Packet) -> Packet:
             pos += ext_len
         else:
             break
-    base = replace(base, src_ip=src, dst_ip=dst, ip_version=6, fragmented=fragmented)
-    if non_initial_fragment:
-        return replace(base, protocol={6: "TCP", 17: "UDP", 58: "ICMPV6"}.get(next_header, f"IP6:{next_header}"), parse_notes=("fragmento IPv6 não inicial",))
+    base = replace(base, src_ip=src, dst_ip=dst, ip_version=6, fragmented=fragmented, dscp=traffic_class >> 2)
+    if frag is not None:
+        ident, offset, more = frag
+        return replace(base, protocol=L4_NAMES.get(next_header, f"IP6:{next_header}"),
+                       frag_info=((6, src, dst, ident, next_header), offset, more, data[pos:], next_header))
     return _decode_l4(next_header, data[pos:], base)
 
 

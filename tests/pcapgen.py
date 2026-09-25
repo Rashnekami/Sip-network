@@ -40,11 +40,11 @@ def udp_frame(src, dst, sport, dport, payload, dscp=0):
 
 def pcap(frames):
     """frames: iterable of (timestamp_seconds, frame_bytes)."""
-    out = struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 262144, 1)
+    out = [struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 262144, 1)]
     for t, f in frames:
         sec = int(t); usec = int(round((t - sec) * 1e6))
-        out += struct.pack("<IIII", sec, usec, len(f), len(f)) + f
-    return out
+        out.append(struct.pack("<IIII", sec, usec, len(f), len(f)) + f)
+    return b"".join(out)
 
 
 def rtp(seq, ts, ssrc, pt=0, payload=b"\xff" * 160, marker=0):

@@ -16,6 +16,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install ".[test]"
+      - run: pip install ".[test,api]"
       - run: pytest -q
       - run: python -c "import ast; ast.parse(open('app.py').read())"
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f Dockerfile.api -t sip-network-api .
+      - name: API responds inside the container
+        run: |
+          docker run -d --name api -e SIP_NETWORK_API_TOKEN=ci -e PORT=8000 -p 8000:8000 sip-network-api
+          for i in $(seq 1 20); do curl -fs localhost:8000/health && exit 0; sleep 1; done
+          docker logs api; exit 1
+      - run: docker build -t sip-network-ui .

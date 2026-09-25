@@ -25,7 +25,8 @@ Evolução para uso em NOC de operadoras VoIP (módulo do checktecnico).
 - `Thresholds` configuráveis, `analyze_file`, `to_dict(include_messages=False)` e `schema_version`.
 - Ladder SVG reutilizável, abas de KPI e registros e cache no Streamlit.
 - CLI `--summary`, `--no-messages` e `--fail-on`.
-- Motor sem dependências externas (UI como extra `.[ui]`), CI no GitHub Actions e 29 testes com cenários completos.
+- Motor sem dependências externas (UI como extra `.[ui]`), CI no GitHub Actions e testes com cenários completos.
+- API HTTP (`api.py`, `Dockerfile.api`, extra `.[api]`) com token, limite de upload e de análises simultâneas, e guias de deploy e de integração com Lovable/Supabase.
 
 ## 2.0.0
 

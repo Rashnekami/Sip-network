@@ -66,6 +66,15 @@ payload = result.to_dict(include_messages=False)   # JSON estável, com schema_v
 
 Detalhes do contrato em [`docs/INTEGRACAO.md`](docs/INTEGRACAO.md).
 
+## API HTTP (webcheck / Lovable)
+
+`api.py` expõe o motor como `POST /v1/analyze` com token. Publicação em Railway, Render ou VPS em [`docs/DEPLOY.md`](docs/DEPLOY.md), e o passo a passo para ligar no Lovable/Supabase em [`docs/LOVABLE.md`](docs/LOVABLE.md).
+
+```bash
+pip install ".[api]"
+SIP_NETWORK_API_TOKEN=troque uvicorn api:app --port 8000
+```
+
 ## Instalação local
 
 ```bash

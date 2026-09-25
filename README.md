@@ -1,88 +1,197 @@
-# VoIP & Network PCAP Analyzer
+# Sip-Network 2.0
 
-Este projeto é uma implementação em Python/Streamlit de um analisador de capturas de pacotes (PCAP) com foco em tráfego de rede geral, VoIP (SIP/RTP) e diagnósticos de segurança. Ele foi inspirado em diversas ferramentas de análise existentes e unifica estatísticas básicas de fluxo, reconstrução de chamadas SIP, análise de qualidade de mídia, detecção de floods/storms, busca em payloads e auditorias simples de firewall.
+Analisador passivo de **SIP / SDP / RTP / RTCP** para arquivos **PCAP e PCAPNG**.
 
-## Principais funcionalidades
+A versão 2.0 foi desenhada para evitar diagnósticos enganosos comuns em analisadores simplificados: não assume que RTP está em uma faixa fixa de portas, não chama inter-packet gap de latência, não considera comunicação entre redes privadas um erro de NAT e não calcula MOS apenas a partir de jitter.
 
-- **Upload e parsing de arquivos `.pcap`/`.pcapng`** diretamente pela interface web.
-- **Análise de rede:** estatísticas agregadas por fluxo (IP origem/destino e protocolo), média/mínima/máxima latência e jitter, contagem de pacotes e bytes, detecção simples de storms (broadcast/multicast/ARP/DHCP) e possíveis erros de NAT.
-- **Análise VoIP:** identificação de fluxos SIP/RTP, cálculo de jitter, estimativa de MOS, reconstrução de chamadas SIP com verificação de mensagens faltantes (ACK/BYE) e análise de qualidade de RTP (jitter e perda de pacotes). 
-- **Detecção de floods e storms:** identifica picos de tráfego por IP/protocolo que excedam um limite configurável (ex.: 500 pacotes/s).
-- **Detecção de port scans:** aponta varreduras verticais (muitas portas em um host) e horizontais (mesma porta em muitos hosts) a partir de um único IP de origem.
-- **Auditoria de firewall:** sinaliza fluxos com muito poucos pacotes (1–3) que podem indicar portas bloqueadas ou resets.
-- **Busca em payloads:** permite pesquisar strings em cargas de pacotes (útil para encontrar IOCs, senhas em texto claro, etc.).
-- **Exportação de relatório JSON** com todas as métricas calculadas.
+## Principais recursos
 
-## Requisitos
+- PCAP clássico e PCAPNG, inclusive timestamps em microssegundos/nanosegundos.
+- Ethernet, VLAN/QinQ, PPPoE, Linux SLL/SLL2, IPv4 e IPv6.
+- SIP sobre UDP e reassembly básico de SIP sobre TCP.
+- Agrupamento por `Call-ID`, `CSeq`, método e `Via branch`.
+- Ladder por chamada e tempos até 180/183/2xx.
+- Detecção correta de **ACK ausente somente para 2xx do INVITE**.
+- Retransmissões SIP e respostas finais 4xx/5xx/6xx.
+- SDP com `c=`, `m=audio`, `rtpmap`, `fmtp`, `ptime`, `rtcp`, direção e ICE candidates.
+- RTP validado por cabeçalho + SDP, com heurística apenas como fallback.
+- Streams separados por SSRC e direção.
+- Sequence number estendido com rollover 16-bit, duplicados e reordenação.
+- Perda RTP baseada em sequência esperada versus única recebida.
+- Jitter de interchegada conforme RFC 3550.
+- Codec e clock rate por SDP/RTP profile; clock inferido quando necessário.
+- Ptime observado, bitrate, gaps e eventos DTMF `telephone-event`.
+- RTCP SR/RR e RTT quando os campos LSR/DLSR permitem cálculo.
+- MOS/R-Factor operacional por E-model, sem inventar one-way delay quando ele não é mensurável.
+- Diagnóstico de RTP ausente, one-way audio, packet loss, jitter, reorder e duplicação.
+- NAT analisado por `Contact`, endereço observado e SDP, sem falsos positivos por simples roteamento entre sub-redes privadas.
+- Heurísticas simples de flood/scan SIP.
+- Dashboard Streamlit e CLI JSON.
+- Processamento local: o arquivo não precisa sair do servidor onde o app está rodando.
 
-- **Sistema operacional:** Qualquer distribuição Linux com Python 3.8 ou superior. Testado no Ubuntu 22.04.
-- **Python:** Versão 3.8+ com `pip` instalado.
-- **Dependências Python:** `streamlit` e `pandas`. Estão listadas em `requirements.txt`.
+## Limites importantes
 
-## Instalação e execução (Ubuntu)
+O objetivo é diagnóstico operacional de captura, não substituir um analisador protocolar completo como Wireshark/tshark.
 
-1. **Atualize o sistema e instale Python:**
-   ```bash
-   sudo apt update
-   sudo apt install python3 python3-pip -y
-   ```
+- **SIP TLS e SRTP** não podem ser inspecionados sem as chaves necessárias.
+- Um PCAP capturado em apenas um ponto normalmente **não mede atraso boca-ouvido**. Por isso o MOS não inventa esse valor. Quando um RTT válido é derivado de RTCP, o sistema usa `RTT/2` como estimativa e deixa isso explícito.
+- NAT/SBC/B2BUA podem reescrever sinalização e mídia. As regras retornam indícios e nível de confiança, não uma afirmação absoluta sem evidência.
+- Ausência de BYE no fim do arquivo não significa falha: a captura pode ter acabado antes da chamada.
+- O E-model é uma **estimativa operacional**. Perfis de codec fora dos perfis narrowband mais conhecidos são marcados com confiança menor.
 
-2. **Clone ou extraia este projeto** em um diretório de sua preferência. O código está dentro da pasta `voip_analyzer`.
+## Instalação local
 
-3. **Instale as dependências:**
-   ```bash
-   pip install -r voip_analyzer/requirements.txt
-   # ou instale manualmente
-   pip install streamlit pandas
-   ```
+```bash
+python -m venv .venv
+source .venv/bin/activate       # Linux/macOS
+# .venv\Scripts\activate      # Windows
+pip install -r requirements.txt
+streamlit run app.py
+```
 
-4. **Execute a aplicação Streamlit:**
-   ```bash
-   cd voip_analyzer
-   streamlit run app.py
-   ```
-   Por padrão, o Streamlit escuta na porta `8501`. A interface será acessível via `http://localhost:8501`.
+Abra `http://localhost:8501`.
 
-5. **(Opcional) Tornar acessível via internet usando ngrok:**
-   - Crie uma conta no [ngrok.com](https://ngrok.com/) e obtenha seu *token* de autenticação.
-   - Instale o ngrok:
-     ```bash
-     wget https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-linux-amd64.zip
-     unzip ngrok-stable-linux-amd64.zip
-     sudo mv ngrok /usr/local/bin/
-     ```
-   - Autentique seu cliente ngrok (substitua `<token>` pelo seu token real):
-     ```bash
-     ngrok config add-authtoken <token>
-     ```
-   - Inicie um túnel para a porta do Streamlit (8501):
-     ```bash
-     ngrok http 8501
-     ```
-   - O terminal exibirá uma URL pública (ex.: `https://1234.ngrok.io`). Compartilhe este link com os colaboradores da sua empresa para acessar o dashboard.
+## Docker
 
-## Uso básico
+```bash
+docker compose up -d --build
+```
 
-1. Abra a interface web (local ou via ngrok).
-2. Clique em **“Selecione um arquivo PCAP”** e carregue seu arquivo `.pcap` ou `.pcapng` (até dezenas de megabytes). A análise começará automaticamente.
-3. Use os filtros na barra lateral para restringir por IP ou protocolo. Ajuste os limites de detecção de floods e scans conforme necessário.
-4. Navegue entre as seções para visualizar:
-   - **Análise de Rede**
-   - **Análise de VoIP**
-   - **Resumo de Chamadas SIP**
-   - **Qualidade de RTP**
-   - **Detecção de Floods/Storms**
-   - **Detecção de Varreduras de Porta/Host**
-   - **Auditoria de Firewall**
-   - **Busca em Payloads**
-5. Clique em **“Baixar relatório JSON”** para salvar um arquivo com todos os dados e métricas.
+Interface: `http://IP_DO_SERVIDOR:8501`
 
-## Observações
+Antes de expor fora de uma rede confiável, defina autenticação simples por token:
 
-* O parser embutido suporta apenas IPv4 e protocolos Ethernet básicos (TCP/UDP/ICMP/ARP). Pacotes IPv6, VLAN e outros são ignorados.
-* As heurísticas usadas para detectar floods, scans e firewall blocks são simplificadas e podem gerar falsos positivos ou negativos. Ajuste os limites de forma conservadora conforme o ambiente.
-* Para análises forenses profundas (extração de arquivos, decodificação de codecs variados, suporte a IPv6), recomenda‑se integrar bibliotecas adicionais (como Scapy ou PyShark) ou estender os módulos em `analysis.py`.
+```bash
+export SIP_NETWORK_ACCESS_TOKEN="troque-por-um-token-forte"
+docker compose up -d --build
+```
 
-## Licença
+O compose usa container read-only, `tmpfs`, remove capabilities Linux e ativa `no-new-privileges`.
 
-Este projeto foi desenvolvido como prova de conceito, unificando várias ideias de repositórios de código aberto (PCAP‑Analyzer, SIP‑Analyzer‑MVP, VoIP‑Analyzer, pcapSearch, sippts). Use‑o e modifique‑o conforme necessário para fins educacionais e internos.
+## CLI
+
+```bash
+pip install .
+sip-network captura.pcapng --pretty
+sip-network captura.pcap --json relatorio.json
+```
+
+Ou:
+
+```bash
+python -m sip_network captura.pcapng --json relatorio.json
+```
+
+## Como o RTP é identificado
+
+1. O parser valida o cabeçalho RTP versão 2.
+2. Endpoints e payload types anunciados no SDP aumentam fortemente a confiança.
+3. Se não houver SDP utilizável, é permitido fallback heurístico somente quando existe sequência coerente de pacotes RTP.
+4. RTCP é separado de RTP antes da análise.
+
+Isso evita a regra frágil `UDP 10000-20000 = RTP`.
+
+## Jitter RFC 3550
+
+Para cada SSRC, o cálculo usa o tempo de chegada convertido para unidades do clock RTP e o timestamp RTP do pacote:
+
+```text
+transit = arrival - rtp_timestamp
+D = transit_atual - transit_anterior
+J = J + (abs(D) - J) / 16
+```
+
+O valor final é convertido novamente para milissegundos pelo clock do codec.
+
+## Perda RTP
+
+A sequência RTP é 16-bit e pode passar de `65535` para `0`. O analisador cria uma sequência estendida, diferencia:
+
+- pacote novo;
+- pacote duplicado;
+- pacote fora de ordem;
+- rollover;
+- número esperado que nunca apareceu.
+
+A perda é calculada apenas sobre sequências únicas esperadas.
+
+## MOS / E-model
+
+O fluxo usa:
+
+```text
+R = 93.2 - Id - Ie_eff
+```
+
+com impairment de codec/perda e burst ratio. O MOS é derivado do R-Factor pela curva do G.107.
+
+Quando não existe uma medição defensável de atraso:
+
+```text
+Id = 0
+MOS note = "sem atraso boca-ouvido"
+```
+
+Ou seja, o valor é deliberadamente rotulado como uma estimativa parcial em vez de apresentar precisão falsa.
+
+## Diagnósticos
+
+Exemplos:
+
+```text
+SIP_MISSING_ACK
+SIP_FINAL_FAILURE
+SIP_RETRANSMISSIONS
+NO_RTP_AFTER_ANSWER
+ONE_WAY_AUDIO
+PRIVATE_SDP_OVER_PUBLIC_SIGNALING
+RTP_PACKET_LOSS
+RTP_JITTER
+LOW_MOS
+RTP_REORDER
+RTP_DUPLICATES
+```
+
+Cada achado contém severidade, confiança e evidências associadas.
+
+## Estrutura
+
+```text
+sip-network-2.0/
+├── app.py
+├── Dockerfile
+├── docker-compose.yml
+├── pyproject.toml
+├── requirements.txt
+├── sip_network/
+│   ├── capture.py
+│   ├── diagnostics.py
+│   ├── emodel.py
+│   ├── engine.py
+│   ├── models.py
+│   ├── network.py
+│   ├── rtcp.py
+│   ├── rtp.py
+│   ├── sdp.py
+│   └── sip.py
+└── tests/
+```
+
+## Próximas evoluções úteis
+
+- RTP/RTCP XR mais completo.
+- G.107.1 específico para wideband e perfis de codec parametrizáveis.
+- TLS/SRTP com importação opcional de segredos/chaves quando tecnicamente possível.
+- Exportação PDF/HTML e ladder gráfico.
+- Banco de assinaturas de falha SIP por fabricante/SBC.
+- Autenticação integrada por usuário/perfil além do token opcional atual.
+- Captura ao vivo via `libpcap` em um agente separado com privilégios mínimos.
+- Comparação de capturas de dois pontos para calcular delay e localizar onde a perda nasce.
+
+## Referências técnicas
+
+- RFC 3261 — SIP
+- RFC 3550 — RTP / RTCP e jitter
+- RFC 3551 — RTP Audio/Video Profile
+- ITU-T G.107 — E-model
+

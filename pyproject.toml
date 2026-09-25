@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sip-network"
+version = "2.0.0"
+description = "Passive SIP/SDP/RTP/RTCP analyzer for PCAP and PCAPNG"
+requires-python = ">=3.11"
+dependencies = ["streamlit>=1.39,<2", "pandas>=2.1,<3"]
+
+[project.scripts]
+sip-network = "sip_network.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["sip_network*"]

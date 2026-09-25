@@ -1,19 +1,10 @@
-# Use uma imagem base Python
-FROM python:3.11-slim
-
-# Define o diretório de trabalho dentro do contêiner
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
-
-# Copia o arquivo de requisitos e instala as dependências
-COPY voip_analyzer/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copia o restante do código da aplicação
-COPY voip_analyzer /app/voip_analyzer
-
-# Define a porta que o Streamlit irá usar
+COPY requirements.txt pyproject.toml ./
+COPY sip_network ./sip_network
+COPY app.py ./app.py
+RUN pip install --upgrade pip && pip install .
 EXPOSE 8501
-
-# Comando para rodar a aplicação Streamlit
-# O Streamlit deve ser executado com a opção --server.port 8501 e --server.address 0.0.0.0
-CMD ["streamlit", "run", "voip_analyzer/app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+HEALTHCHECK CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=3)" || exit 1
+CMD ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8501", "--server.headless=true", "--server.maxUploadSize=250"]

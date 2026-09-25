@@ -1,225 +1,218 @@
-"""
-Streamlit Application
-====================
-
-This module exposes a Streamlit application that allows users to upload
-packet capture files and interactively explore basic network and VoIP
-statistics.  The user interface is deliberately simple: after uploading
-a PCAP file the app parses the data using :func:`voip_analyzer.parser`
-and displays two tables – one for general network metrics and another for
-VoIP‑specific flows.  Filters can be applied by IP address or protocol to
-focus on specific conversations.
-
-To run the application locally install the required Python packages
-(`streamlit` and `pandas`) and execute:
-
-    streamlit run voip_analyzer/app.py
-
-This file does not import any heavy dependencies until after the user has
-uploaded data, so that the initial import cost is low.  If Streamlit is
-not available in the environment the module will still import but running
-the UI will fail; see the project README for installation instructions.
-"""
-
 from __future__ import annotations
 
 import json
-import tempfile
-from typing import List, Optional
+import os
+from dataclasses import asdict
 
 import pandas as pd
 import streamlit as st
 
-from .parser import read_pcap, read_pcap_bytes, Packet
-from .analysis import (
-    analyze_network,
-    analyze_voip,
-    analyze_sip_calls,
-    analyze_rtp_streams,
-    detect_floods,
-    search_payload,
-    detect_port_scans,
-    audit_firewall,
-)
+from sip_network import Thresholds, analyze_bytes
+from sip_network.ladder import ladder_svg
 
+st.set_page_config(page_title="Sip-Network", page_icon="☎️", layout="wide")
+st.markdown("""
+<style>
+.block-container {padding-top: 1.4rem; padding-bottom: 3rem;}
+[data-testid="stMetricValue"] {font-size: 1.65rem;}
+.sn-critical {border-left:4px solid #d33;padding:.65rem 1rem;background:rgba(211,51,51,.08);margin:.4rem 0}
+.sn-warning {border-left:4px solid #e6a700;padding:.65rem 1rem;background:rgba(230,167,0,.08);margin:.4rem 0}
+.sn-info {border-left:4px solid #4b8bf4;padding:.65rem 1rem;background:rgba(75,139,244,.08);margin:.4rem 0}
+</style>
+""", unsafe_allow_html=True)
 
-def _filter_dataframe(df: pd.DataFrame, ip_filter: str, protocol_filter: str) -> pd.DataFrame:
-    """Filter a pandas DataFrame based on IP and protocol criteria.
+st.title("☎️ Sip-Network")
+st.caption("Análise passiva de SIP, SDP, RTP e RTCP em PCAP/PCAPNG — processado localmente no servidor.")
 
-    Args:
-        df: The input DataFrame.
-        ip_filter: An IP address substring to filter source or destination IP.
-        protocol_filter: Protocol name to filter (e.g. "TCP", "UDP", "ICMP", "SIP", "RTP", "ALL").
-
-    Returns:
-        A filtered DataFrame.
-    """
-    result = df
-    if ip_filter:
-        # Case insensitive partial match on source or destination
-        mask = result["source_ip"].str.contains(ip_filter, case=False, na=False) | result["dest_ip"].str.contains(ip_filter, case=False, na=False)
-        result = result[mask]
-    if protocol_filter and protocol_filter.upper() != "ALL":
-        result = result[result["protocol"].str.upper() == protocol_filter.upper()]
-    return result
-
-
-def main() -> None:
-    st.set_page_config(page_title="VoIP & Network PCAP Analyzer", page_icon="📡", layout="wide")
-    st.title("VoIP & Network PCAP Analyzer")
-    st.markdown(
-        "Upload a PCAP file to compute basic network and VoIP metrics. "
-        "This tool parses IPv4/TCP/UDP packets without external dependencies, "
-        "and provides simple latency, jitter and MOS calculations."
-    )
-
-    uploaded_file = st.file_uploader("Selecione um arquivo PCAP", type=["pcap", "pcapng"])
-
-    if uploaded_file is not None:
-        # Read bytes from Streamlit's uploader
-        data = uploaded_file.read()
-        with st.spinner("Analisando PCAP..."):
-            packets: List[Packet] = read_pcap_bytes(data)
-        st.success(f"{len(packets)} pacotes carregados e analisados.")
-
-        # Network analysis
-        network_metrics = analyze_network(packets)
-        df_net = pd.DataFrame(network_metrics)
-
-        # VoIP analysis
-        voip_metrics = analyze_voip(packets)
-        df_voip = pd.DataFrame(voip_metrics)
-
-        # Advanced SIP/RTP analysis
-        sip_calls = analyze_sip_calls(packets)
-        df_calls = pd.DataFrame(sip_calls)
-        rtp_quality = analyze_rtp_streams(packets)
-        df_rtp = pd.DataFrame(rtp_quality)
-        # Flood detection (default threshold 500)
-        flood_threshold = st.sidebar.number_input(
-            "Limite de pacotes/s para detectar flood", min_value=100, max_value=10000, value=500, step=100
-        )
-        flood_events = detect_floods(packets, threshold=flood_threshold)
-        # Port scan detection parameters
-        st.sidebar.subheader("Configuração de Detecção de Scans")
-        port_thr = st.sidebar.number_input(
-            "Portas únicas para alertar scan vertical", min_value=10, max_value=1000, value=50, step=10
-        )
-        ip_thr = st.sidebar.number_input(
-            "Hosts únicos para alertar scan horizontal", min_value=10, max_value=1000, value=50, step=10
-        )
-        time_window = st.sidebar.number_input(
-            "Janela de tempo (ms) para contagem de scans (0 = todo arquivo)",
-            min_value=0, max_value=300000, value=60000, step=10000
-        )
-        scan_events = detect_port_scans(packets, port_threshold=port_thr, ip_threshold=ip_thr, time_window_ms=time_window)
-        df_scans = pd.DataFrame(scan_events)
-        # Firewall audit
-        fw_results = audit_firewall(packets)
-        df_fw = pd.DataFrame(fw_results)
-        df_floods = pd.DataFrame(flood_events)
-
-        # Filtering UI
-        st.sidebar.header("Filtros")
-        ip_filter = st.sidebar.text_input("Filtrar por IP (origem ou destino)")
-        protocol_options_net = ["ALL"] + sorted(df_net["protocol"].dropna().unique().tolist())
-        protocol_filter_net = st.sidebar.selectbox("Protocolo (Análise de Rede)", protocol_options_net)
-        protocol_options_voip = ["ALL"] + sorted(df_voip["protocol"].dropna().unique().tolist())
-        protocol_filter_voip = st.sidebar.selectbox("Protocolo (Análise de VoIP)", protocol_options_voip)
-
-        # Display network metrics table
-        st.header("Análise de Rede")
-        st.caption("Métricas agregadas por fluxo (IP de origem → IP de destino e protocolo).")
-        filtered_net = _filter_dataframe(df_net, ip_filter, protocol_filter_net)
-        st.dataframe(filtered_net, use_container_width=True)
-
-        # Display VoIP metrics table
-        st.header("Análise de VoIP")
-        st.caption("Fluxos SIP/RTP e métricas de chamada.")
-        filtered_voip = _filter_dataframe(df_voip, ip_filter, protocol_filter_voip)
-        st.dataframe(filtered_voip, use_container_width=True)
-
-        # SIP call summary
-        st.header("Resumo de Chamadas SIP")
-        st.caption("Reconstituição de chamadas SIP baseada em Call-ID e verificação de mensagens faltantes.")
-        if df_calls.empty:
-            st.write("Nenhuma chamada SIP identificada.")
-        else:
-            st.dataframe(df_calls, use_container_width=True)
-
-        # RTP quality analysis
-        st.header("Qualidade de RTP")
-        st.caption("Estatísticas de jitter e perda de pacotes por fluxo RTP (portas 10000–20000).")
-        if df_rtp.empty:
-            st.write("Nenhum fluxo RTP identificado.")
-        else:
-            st.dataframe(df_rtp, use_container_width=True)
-
-        # Flood detection
-        st.header("Detecção de Floods/Storms")
-        st.caption("Eventos em que a taxa de pacotes por segundo excedeu o limite configurado.")
-        if df_floods.empty:
-            st.write("Nenhum flood detectado com o limite atual.")
-        else:
-            st.dataframe(df_floods, use_container_width=True)
-
-        # Port scan detection
-        st.header("Detecção de Varreduras de Porta/Host")
-        st.caption(
-            "Heurística simples baseada no número de portas/hosts únicos contatados por cada origem dentro de uma janela de tempo."
-        )
-        if df_scans.empty:
-            st.write("Nenhum scan detectado com os parâmetros atuais.")
-        else:
-            st.dataframe(df_scans, use_container_width=True)
-
-        # Firewall audit
-        st.header("Auditoria de Firewall (Conexões Possivelmente Bloqueadas)")
-        st.caption(
-            "Sinaliza fluxos com muito poucos pacotes (≤3) que podem indicar portas bloqueadas ou resetadas."
-        )
-        if df_fw.empty:
-            st.write("Nenhuma possível porta bloqueada identificada.")
-        else:
-            st.dataframe(df_fw, use_container_width=True)
-
-        # Payload search
-        st.header("Busca em Payloads")
-        search_term = st.text_input("Digite uma string para procurar nos payloads", value="")
-        if search_term:
-            search_results = search_payload(packets, search_term)
-            df_search = pd.DataFrame(search_results)
-            if df_search.empty:
-                st.write("Nenhum pacote contém a string especificada.")
+access_token = os.getenv("SIP_NETWORK_ACCESS_TOKEN")
+if access_token:
+    if not st.session_state.get("authenticated"):
+        supplied = st.text_input("Token de acesso", type="password")
+        if st.button("Entrar", type="primary"):
+            if supplied == access_token:
+                st.session_state["authenticated"] = True
+                st.rerun()
             else:
-                st.dataframe(df_search, use_container_width=True)
+                st.error("Token inválido.")
+        st.stop()
 
-        # Prepare JSON report for download
-        report = {
-            "network_metrics": network_metrics,
-            "voip_metrics": voip_metrics,
-            "sip_calls": sip_calls,
-            "rtp_quality": rtp_quality,
-            "flood_events": flood_events,
-            "scan_events": scan_events,
-            "firewall_audit": fw_results,
-        }
-        json_report = json.dumps(report, indent=2, ensure_ascii=False)
+OUTCOME_PT = {
+    "answered": "atendida", "busy": "ocupado", "no_answer": "não atendida", "cancelled": "cancelada",
+    "rejected": "recusada", "not_found": "número inexistente", "auth_failed": "falha de autenticação",
+    "media_negotiation_failed": "codec incompatível", "server_error": "erro do servidor (5xx)", "timeout": "timeout",
+    "no_response": "sem resposta", "redirected": "redirecionada", "client_error": "erro 4xx", "global_failure": "falha 6xx",
+    "in_progress": "em andamento", "unknown": "desconhecido",
+}
 
-        st.download_button(
-            "Baixar relatório JSON",
-            data=json_report,
-            file_name="pcap_analysis_report.json",
-            mime="application/json",
-        )
 
-    st.info(
-        "Esta ferramenta é experimental e usa heurísticas simples. Para análises "
-        "mais aprofundadas (extração de mensagens SIP, detecção de falhas de "
-        "firewall, testes de segurança), consulte projetos como sippts e libpcap "
-        "ou integre ferramentas externas."
+@st.cache_data(show_spinner=False, max_entries=4)
+def run_analysis(data: bytes, name: str, th: Thresholds):
+    return analyze_bytes(data, name, th)
+
+
+with st.sidebar:
+    st.header("Limites de diagnóstico")
+    st.caption("Ajuste por cliente/tronco. Os padrões seguem práticas comuns de operadoras.")
+    th = Thresholds(
+        pdd_warning_ms=st.number_input("PDD alerta (ms)", 500, 60000, 5000, 500),
+        loss_warning_pct=st.number_input("Perda RTP alerta (%)", 0.1, 50.0, 2.0, 0.5),
+        jitter_warning_ms=st.number_input("Jitter alerta (ms)", 1.0, 500.0, 30.0, 5.0),
+        mos_warning=st.number_input("MOS alerta abaixo de", 1.0, 4.5, 3.6, 0.1),
+        expected_rtp_dscp=st.number_input("DSCP esperado no RTP", 0, 63, 46, 1),
+        home_country_code=st.text_input("Código do país (fraude internacional)", "55"),
     )
 
+uploaded = st.file_uploader("Captura de rede", type=["pcap", "pcapng", "cap"], help="PCAP clássico ou PCAPNG. SIP TLS/SRTP não podem ser inspecionados sem descriptografia.")
+if not uploaded:
+    st.info("Envie uma captura para iniciar. O analisador identifica SIP pelo conteúdo (qualquer porta), remonta TCP e fragmentos IP, e associa o RTP às chamadas pelo SDP.")
+    st.stop()
 
-if __name__ == "__main__":
-    main()
+if uploaded.size > 250 * 1024 * 1024:
+    st.error("Arquivo acima de 250 MB. Para capturas maiores, filtre o intervalo/protocolos antes da análise.")
+    st.stop()
+
+try:
+    with st.spinner("Analisando captura…"):
+        result = run_analysis(uploaded.getvalue(), uploaded.name, th)
+except Exception as exc:
+    st.error(f"Falha ao analisar: {exc}")
+    st.stop()
+
+cap = result.capture
+kc = result.kpis.get("calls", {})
+km = result.kpis.get("media", {})
+fmt = lambda v, suf="": "—" if v is None else f"{v}{suf}"
+cols = st.columns(7)
+cols[0].metric("Chamadas", kc.get("attempts", 0))
+cols[1].metric("ASR", fmt(kc.get("asr_pct"), "%"))
+cols[2].metric("NER", fmt(kc.get("ner_pct"), "%"))
+cols[3].metric("PDD médio", fmt(kc.get("pdd_avg_ms"), " ms"))
+cols[4].metric("ACD", fmt(kc.get("acd_s"), " s"))
+cols[5].metric("MOS médio", fmt(km.get("mos_avg")))
+cols[6].metric("Críticos", sum(1 for d in result.diagnostics if d.severity == "critical"))
+
+tabs = st.tabs(["Resumo", "Chamadas SIP", "RTP / Qualidade", "Registros", "Diagnósticos", "Segurança SIP", "Rede"])
+summary, calls_tab, rtp_tab, reg_tab, diag_tab, sec_tab, net_tab = tabs
+
+with summary:
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        st.subheader("Achados prioritários")
+        if not [d for d in result.diagnostics if d.severity != "info"]:
+            st.success("Nenhum problema crítico ou de alerta pelas regras atuais.")
+        for d in result.diagnostics[:15]:
+            st.markdown(f'<div class="sn-{d.severity}"><b>{d.title}</b><br>{d.detail}<br><small>{d.code} · Call-ID: {d.call_id or "—"} · confiança: {d.confidence}</small></div>', unsafe_allow_html=True)
+    with c2:
+        st.subheader("Desfecho das chamadas")
+        if kc.get("outcomes"):
+            st.dataframe(pd.DataFrame([{"Desfecho": OUTCOME_PT.get(k, k), "Chamadas": v} for k, v in kc["outcomes"].items()]), hide_index=True, use_container_width=True)
+        st.write({"SER": fmt(kc.get("ser_pct"), "%"), "SEER": fmt(kc.get("seer_pct"), "%"), "ISA": fmt(kc.get("isa_pct"), "%"),
+                  "PDD p95": fmt(kc.get("pdd_p95_ms"), " ms"), "Minutos": kc.get("total_minutes")})
+        if kc.get("q850_causes"):
+            with st.expander("Causas Q.850"):
+                st.write(kc["q850_causes"])
+        st.subheader("Captura")
+        st.write({"Pacotes": cap["packets"], "Duração (s)": round(cap["duration_s"], 1), "SIP": cap["sip_messages"],
+                  "IPv4": cap["ipv4_packets"], "IPv6": cap["ipv6_packets"], "VLAN": cap["vlan_packets"],
+                  "Fragmentados": cap["fragmented_packets"]})
+        if cap.get("parse_notes"):
+            with st.expander("Observações do parser"):
+                for n in cap["parse_notes"]: st.write("•", n)
+    if result.kpis.get("by_peer"):
+        st.subheader("Por destino de sinalização (tronco/SBC)")
+        st.dataframe(pd.DataFrame(result.kpis["by_peer"]), hide_index=True, use_container_width=True)
+    if result.kpis.get("failing_destinations"):
+        with st.expander("Destinos com mais falhas"):
+            st.dataframe(pd.DataFrame(result.kpis["failing_destinations"]), hide_index=True, use_container_width=True)
+
+with calls_tab:
+    rows = [{
+        "Call-ID": c.call_id, "De": c.from_uri, "Para": c.to_uri, "Desfecho": OUTCOME_PT.get(c.outcome, c.outcome),
+        "Final": c.final_status, "Q.850": c.q850_cause, "PDD ms": c.pdd_ms, "Setup ms": c.setup_time_ms,
+        "Duração s": c.duration_s, "Desligou": c.disconnect_side, "Codecs": ", ".join(c.negotiated_codecs),
+        "ACK ausente": c.missing_ack, "Auth": c.auth_challenges, "Re-INVITE": c.reinvites,
+        "Retransm.": c.retransmissions, "Origem": c.caller_ip, "Destino": c.callee_ip,
+    } for c in result.calls]
+    if not rows:
+        st.info("Nenhuma chamada (INVITE) encontrada na captura.")
+    else:
+        only_bad = st.toggle("Somente chamadas com problema", value=False)
+        bad_ids = {d.call_id for d in result.diagnostics if d.severity in ("critical", "warning") and d.call_id}
+        df = pd.DataFrame(rows)
+        if only_bad:
+            df = df[df["Call-ID"].isin(bad_ids)]
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        options = list(df["Call-ID"]) or [c.call_id for c in result.calls]
+        selected = st.selectbox("Detalhe da chamada", options)
+        call = next(c for c in result.calls if c.call_id == selected)
+        for d in [x for x in result.diagnostics if x.call_id == call.call_id]:
+            st.markdown(f'<div class="sn-{d.severity}"><b>{d.title}</b><br>{d.detail}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="overflow-x:auto">{ladder_svg(call)}</div>', unsafe_allow_html=True)
+        d1, d2 = st.columns(2)
+        with d1:
+            st.write({"User-Agent origem": call.caller_user_agent, "User-Agent destino": call.callee_user_agent,
+                      "P-Asserted-Identity": call.p_asserted_identity, "Diversion": call.diversion,
+                      "Reason": call.reason_header, "Session-Expires": call.session_expires})
+        with d2:
+            if call.hold_events: st.write("Espera:", call.hold_events)
+            if call.transfers: st.write("Transferências:", call.transfers)
+            if call.dialogs: st.write("Diálogos:", call.dialogs)
+        with st.expander("SDP / endpoints de mídia"):
+            st.json(call.media_endpoints)
+        with st.expander("Mensagens SIP completas"):
+            for m in call.messages:
+                st.code(m.start_line + "\n" + "\n".join(f"{k}: {v}" for k, vals in m.raw_headers.items() for v in vals) + ("\n\n" + m.body if m.body else ""), language="http")
+
+with rtp_tab:
+    rows = [asdict(s) for s in result.rtp_streams]
+    if rows:
+        df = pd.DataFrame(rows)
+        show = df[["stream_id", "call_id", "src_ip", "src_port", "dst_ip", "dst_port", "codec", "packets", "loss_percent", "jitter_ms",
+                   "mos", "r_factor", "max_interarrival_gap_ms", "rtcp_remote_loss_pct", "rtt_ms", "dscp", "ptime_ms", "dtmf_digits",
+                   "duplicates", "out_of_order"]]
+        st.dataframe(show, use_container_width=True, hide_index=True)
+        st.caption("Jitter: RFC 3550. MOS: E-model (G.107) por codec, perda e burst; o atraso só entra quando há RTT de RTCP. "
+                   "Perda RTCP remota é a perda que o receptor viu, depois do ponto de captura.")
+    else:
+        st.info("Nenhum fluxo RTP confiável foi detectado.")
+
+with reg_tab:
+    if result.registrations:
+        st.dataframe(pd.DataFrame(result.registrations), use_container_width=True, hide_index=True)
+    else:
+        st.info("Nenhum REGISTER na captura.")
+
+with diag_tab:
+    severity = st.multiselect("Severidade", ["critical", "warning", "info"], default=["critical", "warning", "info"])
+    for d in [x for x in result.diagnostics if x.severity in severity]:
+        st.markdown(f'<div class="sn-{d.severity}"><b>{d.code} — {d.title}</b><br>{d.detail}<br><small>Call-ID: {d.call_id or "—"} | Stream: {d.stream_id or "—"} | confiança: {d.confidence}</small></div>', unsafe_allow_html=True)
+        if d.evidence:
+            st.json(d.evidence, expanded=False)
+
+with sec_tab:
+    if result.security:
+        st.dataframe(pd.DataFrame(result.security), use_container_width=True, hide_index=True)
+    else:
+        st.success("Nenhum padrão de ataque SIP identificado (scanner, força bruta, enumeração, flood ou fraude internacional).")
+
+with net_tab:
+    if result.kpis.get("icmp_errors"):
+        st.subheader("Erros ICMP (destino inalcançável)")
+        st.dataframe(pd.DataFrame(result.kpis["icmp_errors"]), use_container_width=True, hide_index=True)
+    if result.network_flows:
+        st.subheader("Fluxos")
+        st.dataframe(pd.DataFrame(result.network_flows[:500]), use_container_width=True, hide_index=True)
+        st.caption("Inter-packet gap não é latência. Latência só é exibida quando existe uma medição correlacionável.")
+
+download_cols = st.columns(3)
+payload = json.dumps(result.to_dict(), ensure_ascii=False, indent=2, default=str).encode("utf-8")
+download_cols[0].download_button("Baixar JSON", payload, file_name=f"{uploaded.name}.sip-network.json", mime="application/json")
+call_csv = pd.DataFrame([{
+    "call_id": c.call_id, "from": c.from_uri, "to": c.to_uri, "outcome": c.outcome, "final_status": c.final_status,
+    "q850": c.q850_cause, "pdd_ms": c.pdd_ms, "setup_ms": c.setup_time_ms, "duration_s": c.duration_s,
+    "disconnect_side": c.disconnect_side, "missing_ack": c.missing_ack, "retransmissions": c.retransmissions,
+    "caller_ip": c.caller_ip, "callee_ip": c.callee_ip,
+} for c in result.calls]).to_csv(index=False).encode("utf-8")
+download_cols[1].download_button("Chamadas CSV", call_csv, file_name=f"{uploaded.name}.calls.csv", mime="text/csv")
+rtp_csv = pd.DataFrame([asdict(s) for s in result.rtp_streams]).to_csv(index=False).encode("utf-8")
+download_cols[2].download_button("RTP CSV", rtp_csv, file_name=f"{uploaded.name}.rtp.csv", mime="text/csv")

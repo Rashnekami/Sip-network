@@ -1,0 +1,2 @@
+Optional: create .streamlit/config.toml to change upload size or bind address.
+The Docker image already sets maxUploadSize=500 MB.

@@ -62,6 +62,7 @@ class SdpMedia:
 class SdpSession:
     connection_ip: Optional[str]
     media: list[SdpMedia] = field(default_factory=list)
+    origin_ip: Optional[str] = None
 
 
 @dataclass(slots=True)
@@ -98,6 +99,9 @@ class SipMessage:
     sdp: Optional[SdpSession] = None
     raw_headers: dict[str, list[str]] = field(default_factory=dict)
     dscp: Optional[int] = None
+    # Declared Content-Length vs bytes really carried (UDP, one message per datagram). A mismatch is a SIP ALG signature.
+    content_length_declared: Optional[int] = None
+    body_bytes_actual: Optional[int] = None
 
     def header(self, name: str) -> Optional[str]:
         vals = self.raw_headers.get(name.lower())
@@ -234,6 +238,7 @@ class Diagnostic:
     call_id: Optional[str] = None
     stream_id: Optional[str] = None
     evidence: dict[str, Any] = field(default_factory=dict)
+    category: str = ""
 
 
 @dataclass(slots=True)
@@ -246,7 +251,9 @@ class AnalysisResult:
     security: list[dict[str, Any]]
     kpis: dict[str, Any] = field(default_factory=dict)
     registrations: list[dict[str, Any]] = field(default_factory=list)
-    schema_version: str = "2.1"
+    nat: list[dict[str, Any]] = field(default_factory=list)
+    ddos: list[dict[str, Any]] = field(default_factory=list)
+    schema_version: str = "2.2"
 
     def to_dict(self, include_messages: bool = True) -> dict[str, Any]:
         calls = [asdict(x) for x in self.calls]
@@ -263,4 +270,6 @@ class AnalysisResult:
             "diagnostics": [asdict(x) for x in self.diagnostics],
             "network_flows": self.network_flows,
             "security": self.security,
+            "nat": self.nat,
+            "ddos": self.ddos,
         }

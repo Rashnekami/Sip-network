@@ -74,7 +74,7 @@ Para atualizar: `git pull && docker build -f Dockerfile.api -t sip-network-api .
 
 ## Contrato da API
 
-`GET /health` → `{"status": "ok", "version": "2.1.0"}`
+`GET /health` → `{"status": "ok", "version": "2.2.0"}`
 
 `POST /v1/analyze` (multipart/form-data), header `Authorization: Bearer <token>`:
 

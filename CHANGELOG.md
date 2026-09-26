@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.2.0
+
+### Adicionado
+
+- Motor de NAT (`nat.py`, saída `nat[]`): aparelho atrás de NAT/CGNAT, falta de rport, expires longo demais para o NAT,
+  SIP ALG por Content-Length divergente e por SDP reescrito pela metade, IP privado no SDP, RTP de endereço fora do SDP
+  (latching) e áudio unidirecional causado por NAT.
+- Motor de DDoS (`ddos.py`, saída `ddos[]`): volumétrico com linha de base, SYN flood, ICMP flood, reflexão/amplificação
+  e flood SIP distribuído. O RTP das chamadas não conta como ataque.
+- `category` em cada diagnóstico, `kpis.charts` para gráficos de rosca e `kpis.traffic_timeline`.
+- Abas NAT e DDoS no Streamlit; cenários de NAT e SYN flood na captura de demonstração.
+
+### Alterado
+
+- `schema_version` 2.2. As regras `NAT_CONTACT_MISMATCH` e `PRIVATE_SDP_OVER_PUBLIC_SIGNALING` foram substituídas por
+  `DEVICE_BEHIND_NAT` e `NAT_PRIVATE_SDP`.
+
 ## 2.1.0
 
 Evolução para uso em NOC de operadoras VoIP (módulo do checktecnico).

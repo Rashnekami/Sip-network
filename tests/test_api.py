@@ -33,7 +33,7 @@ class ApiTests(unittest.TestCase):
                              data={"thresholds": json.dumps({"pdd_warning_ms": 500})})
         self.assertEqual(r.status_code, 200, r.text)
         body = r.json()
-        self.assertEqual(body["schema_version"], "2.1")
+        self.assertEqual(body["schema_version"], "2.2")
         self.assertEqual(body["kpis"]["calls"]["answered"], 1)
         self.assertTrue(body["calls"][0]["ladder_svg"].startswith("<svg"))
         self.assertNotIn("raw_headers", body["calls"][0]["messages"][0])

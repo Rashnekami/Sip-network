@@ -6,7 +6,6 @@ from typing import Any
 
 from .config import DEFAULT_THRESHOLDS, Thresholds
 from .models import Diagnostic, RtpStream, SipCall
-from .sip import is_private_or_local
 
 DSCP_NAMES = {0: "BE", 8: "CS1", 10: "AF11", 16: "CS2", 18: "AF21", 24: "CS3", 26: "AF31", 32: "CS4",
               34: "AF41", 40: "CS5", 46: "EF", 48: "CS6", 56: "CS7"}
@@ -26,6 +25,26 @@ OUTCOME_HINT = {
     "not_found": "Número/usuário inexistente (404/484/604). Verificar formato de discagem e plano de numeração.",
     "rejected": "Chamada recusada (403/603). Verificar permissões, bloqueios, saldo ou ACL no destino.",
 }
+
+
+CATEGORY_LABELS = {"sinalizacao": "Sinalização SIP", "midia": "Mídia/áudio", "nat": "NAT", "seguranca": "Segurança",
+                   "ddos": "DDoS/flood", "rede": "Rede/QoS", "registro": "Registro"}
+
+
+def category_of(code: str) -> str:
+    if code.startswith("SEC_"):
+        return "seguranca"
+    if code.startswith(("NAT_", "SIP_ALG", "DEVICE_BEHIND_NAT")):
+        return "nat"
+    if code.startswith("REGISTER_"):
+        return "registro"
+    if code.startswith("ICMP_") or code.endswith("_DSCP"):
+        return "rede"
+    if code.startswith(("RTP_", "RTCP_", "MEDIA_", "LOW_MOS", "ONE_WAY", "NO_RTP")):
+        return "midia"
+    if code.endswith(("_FLOOD", "_VOLUMETRIC", "_AMPLIFICATION", "_DISTRIBUTED")):
+        return "ddos"
+    return "sinalizacao"
 
 
 def _public(ip: str | None) -> bool:
@@ -130,18 +149,6 @@ def _call_rules(c: SipCall, cstreams: list[RtpStream], th: Thresholds, capture_e
                     "A mídia não foi liberada (BYE não chegou ao outro lado ou gateway travado).", "medium",
                     {"streams": [s.stream_id for s in late]})
 
-    for m in c.messages:
-        if m.contact_host and m.src_ip and is_private_or_local(m.contact_host) and _public(m.src_ip):
-            add("info", "NAT_CONTACT_MISMATCH", "NAT detectado na sinalização",
-                f"Contact anuncia {m.contact_host}, enquanto o pacote SIP foi observado vindo de {m.src_ip}. NAT traversal é necessário; isso não é erro por si só.",
-                "high", {"contact_host": m.contact_host, "observed_source": m.src_ip})
-            break
-    private_sdp = [ep for ep in c.media_endpoints if is_private_or_local(ep.get("ip"))]
-    if private_sdp and any(_public(m.src_ip) or _public(m.dst_ip) for m in c.messages):
-        one_way = any(x.code in ("ONE_WAY_AUDIO", "NO_RTP_AFTER_ANSWER") for x in d)
-        add("critical" if one_way else "warning", "PRIVATE_SDP_OVER_PUBLIC_SIGNALING", "Endereço privado anunciado no SDP",
-            "O SDP contém endereço de mídia privado em uma chamada observada atravessando endereços públicos. Se não houver SBC/relay/ICE corrigindo a mídia, isso pode causar RTP ausente ou unidirecional.",
-            "high" if one_way else "medium", {"media_ips": [ep.get("ip") for ep in private_sdp]})
     return d
 
 
@@ -191,7 +198,8 @@ def _stream_rules(s: RtpStream, th: Thresholds) -> list[Diagnostic]:
 
 def diagnose(calls: list[SipCall], streams: list[RtpStream], th: Thresholds = DEFAULT_THRESHOLDS,
              capture_end: float | None = None, security: list[dict[str, Any]] | None = None,
-             icmp_errors: list[dict[str, Any]] | None = None, registrations: list[dict[str, Any]] | None = None) -> list[Diagnostic]:
+             icmp_errors: list[dict[str, Any]] | None = None, registrations: list[dict[str, Any]] | None = None,
+             nat: list[dict[str, Any]] | None = None, ddos: list[dict[str, Any]] | None = None) -> list[Diagnostic]:
     d: list[Diagnostic] = []
     by_call: dict[str, list[RtpStream]] = defaultdict(list)
     for s in streams:
@@ -247,6 +255,16 @@ def diagnose(calls: list[SipCall], streams: list[RtpStream], th: Thresholds = DE
     for a in security or []:
         d.append(Diagnostic(a["severity"], f"SEC_{a['type'].upper()}", "Alerta de segurança SIP", a["detail"], "medium",
                             evidence={k: v for k, v in a.items() if k not in ("detail", "severity")}))
+
+    for f in nat or []:
+        d.append(Diagnostic(f["severity"], f["type"], f["title"], f["detail"], "high" if f["severity"] != "info" else "medium",
+                            f.get("call_id"), None, {"source_ip": f.get("source_ip"), **f.get("evidence", {})}, "nat"))
+    for e in ddos or []:
+        d.append(Diagnostic(e["severity"], e["type"], e["title"], e["detail"], "medium", None, None,
+                            {k: v for k, v in e.items() if k not in ("detail", "severity", "title", "type")}, "ddos"))
+    for x in d:
+        if not x.category:
+            x.category = category_of(x.code)
 
     order = {"critical": 0, "warning": 1, "info": 2}
     d.sort(key=lambda x: (order.get(x.severity, 9), x.call_id or "", x.stream_id or ""))

@@ -36,6 +36,17 @@ class Thresholds:
     options_sweep_hosts: int = 10
     toll_fraud_destinations: int = 5
     home_country_code: str = "55"
+    # NAT
+    nat_register_expires_s: int = 120
+    # DDoS / floods (per destination, per second)
+    ddos_min_pps: float = 2000.0
+    ddos_min_seconds: int = 3
+    ddos_baseline_factor: float = 10.0
+    ddos_distributed_sources: int = 50
+    syn_flood_min_pps: float = 200.0
+    sip_flood_min_rps: float = 100.0
+    icmp_flood_min_pps: float = 500.0
+    reflection_min_pps: float = 200.0
 
 
 DEFAULT_THRESHOLDS = Thresholds()

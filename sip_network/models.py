@@ -56,6 +56,11 @@ class SdpMedia:
     rtcp_port: Optional[int] = None
     rtcp_ip: Optional[str] = None
     ice_candidates: list[str] = field(default_factory=list)
+    # WebRTC: ICE credentials, DTLS fingerprint/role and rtcp-mux, from media or session level.
+    ice_ufrag: Optional[str] = None
+    fingerprint: Optional[str] = None
+    setup: Optional[str] = None
+    rtcp_mux: bool = False
 
 
 @dataclass(slots=True)
@@ -63,6 +68,8 @@ class SdpSession:
     connection_ip: Optional[str]
     media: list[SdpMedia] = field(default_factory=list)
     origin_ip: Optional[str] = None
+    ice_ufrag: Optional[str] = None
+    fingerprint: Optional[str] = None
 
 
 @dataclass(slots=True)
@@ -226,6 +233,10 @@ class RtpStream:
     rtcp_remote_cumulative_lost: Optional[int] = None
     rtcp_remote_jitter_ms: Optional[float] = None
     sdp_destination_match: Optional[bool] = None
+    media_kind: str = "audio"
+    secure: bool = False  # SRTP (WebRTC/DTLS-SRTP or SDP RTP/SAVP): payload encrypted, headers still readable
+    codec_inferred: bool = False
+    webrtc_session: Optional[str] = None
 
 
 @dataclass(slots=True)
@@ -253,7 +264,8 @@ class AnalysisResult:
     registrations: list[dict[str, Any]] = field(default_factory=list)
     nat: list[dict[str, Any]] = field(default_factory=list)
     ddos: list[dict[str, Any]] = field(default_factory=list)
-    schema_version: str = "2.2"
+    webrtc: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = "2.3"
 
     def to_dict(self, include_messages: bool = True) -> dict[str, Any]:
         calls = [asdict(x) for x in self.calls]
@@ -272,4 +284,5 @@ class AnalysisResult:
             "security": self.security,
             "nat": self.nat,
             "ddos": self.ddos,
+            "webrtc": self.webrtc,
         }

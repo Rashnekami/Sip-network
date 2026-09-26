@@ -47,6 +47,11 @@ class Thresholds:
     sip_flood_min_rps: float = 100.0
     icmp_flood_min_pps: float = 500.0
     reflection_min_pps: float = 200.0
+    # WebRTC
+    webrtc_setup_warning_ms: float = 3000.0
+    webrtc_consent_lost_checks: int = 3
+    # Network
+    fragments_lost_warning: int = 1
 
 
 DEFAULT_THRESHOLDS = Thresholds()

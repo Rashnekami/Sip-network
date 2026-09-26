@@ -31,6 +31,7 @@ def parse_sdp(body: str) -> SdpSession | None:
     current: SdpMedia | None = None
     pending_rtpmap: dict[int, tuple[str, int, int]] = {}
     pending_fmtp: dict[int, str] = {}
+    session_attrs: dict[str, str] = {}
 
     for raw in body.replace("\r\n", "\n").split("\n"):
         line = raw.strip()
@@ -66,6 +67,10 @@ def parse_sdp(body: str) -> SdpSession | None:
                 if pt in STATIC_AUDIO:
                     name, rate, channels = STATIC_AUDIO[pt]
                     current.codecs[pt] = SdpCodec(pt, name, rate, channels)
+        elif kind == "a" and current is None:
+            name, _, val = value.partition(":")
+            if name.lower() in ("ice-ufrag", "fingerprint", "setup"):
+                session_attrs[name.lower()] = val.strip()
         elif kind == "a" and current is not None:
             m = re.match(r"rtpmap:(\d+)\s+([^/\s]+)/([0-9]+)(?:/([0-9]+))?", value, re.I)
             if m:
@@ -93,11 +98,38 @@ def parse_sdp(body: str) -> SdpSession | None:
                 continue
             if value.lower().startswith("candidate:"):
                 current.ice_candidates.append(value)
+                continue
+            name, _, val = value.partition(":")
+            name = name.lower()
+            if name == "ice-ufrag":
+                current.ice_ufrag = val.strip()
+            elif name == "fingerprint":
+                current.fingerprint = val.strip()
+            elif name == "setup":
+                current.setup = val.strip()
+            elif name == "rtcp-mux":
+                current.rtcp_mux = True
 
     for m in media:
         if not m.connection_ip:
             m.connection_ip = session_ip
-    return SdpSession(session_ip, media, origin_ip)
+        m.ice_ufrag = m.ice_ufrag or session_attrs.get("ice-ufrag")
+        m.fingerprint = m.fingerprint or session_attrs.get("fingerprint")
+        m.setup = m.setup or session_attrs.get("setup")
+    return SdpSession(session_ip, media, origin_ip, session_attrs.get("ice-ufrag"), session_attrs.get("fingerprint"))
+
+
+def parse_candidate(line: str) -> dict | None:
+    """a=candidate:<foundation> <component> <transport> <priority> <address> <port> typ <type> [raddr ...]"""
+    parts = line.split(":", 1)[-1].split()
+    if len(parts) < 8 or parts[6].lower() != "typ":
+        return None
+    try:
+        component, priority, port = int(parts[1]), int(parts[3]), int(parts[5])
+    except ValueError:
+        return None
+    return {"component": component, "transport": parts[2].lower(), "priority": priority, "address": parts[4],
+            "port": port, "type": parts[7].lower(), "mdns": parts[4].lower().endswith(".local")}
 
 
 def codec_for_payload(session: SdpSession | None, pt: int) -> SdpCodec | None:

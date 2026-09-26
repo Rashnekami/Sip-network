@@ -29,6 +29,11 @@ Pensado para técnicos de NOC de operadoras VoIP, como módulo do checktecnico o
   Sem falsos positivos por simples roteamento entre sub-redes privadas.
 - DDoS/flood por destino e por segundo: volumétrico (ignora RTP de chamadas), SYN flood, ICMP flood, reflexão/amplificação
   (DNS, NTP, SSDP, Memcached, CLDAP…) e flood SIP distribuído, com origens, pico em pps/Mbit/s e duração.
+- WebRTC sem as chaves de criptografia: SIP sobre WebSocket (ws:// legível; wss:// identificado), checagens ICE por par
+  de candidatos (falha, 401, conflito de papel, consentimento perdido no meio da chamada), servidor STUN sem resposta,
+  TURN (credencial recusada, cota/capacidade, relay em uso, mídia dentro de ChannelData), handshake DTLS (sem resposta,
+  alerta fatal, não termina por MTU, sem use_srtp) e qualidade do SRTP pelo cabeçalho (perda, jitter, direção, gaps).
+  No SDP: candidatos só mDNS/privados e oferta WebRTC respondida com RTP comum.
 - Séries prontas para gráficos de rosca (`kpis.charts`) e linha do tempo de tráfego.
 - Remontagem de fragmentos IPv4/IPv6 (INVITE com SDP grande) e leitura de DSCP.
 - Modelo de diálogo RFC 3261: forking, ACK por diálogo, re-INVITE, hold/resume, REFER, desafios 401/407.
@@ -187,11 +192,23 @@ Exemplos:
 | Mídia | `NO_RTP_AFTER_ANSWER`, `ONE_WAY_AUDIO`, `MEDIA_START_DELAY`, `RTP_AFTER_BYE`, `RTP_PACKET_LOSS`, `RTCP_REMOTE_LOSS`, `RTP_JITTER`, `LOW_MOS`, `RTP_GAP`, `RTP_PT_NOT_NEGOTIATED`, `MEDIA_DEST_MISMATCH`, `RTP_SSRC_CHANGE`, `RTP_DSCP`, `RTP_REORDER`, `RTP_DUPLICATES` |
 | NAT | `DEVICE_BEHIND_NAT`, `NAT_NO_RPORT`, `NAT_REGISTER_EXPIRES_TOO_LONG`, `SIP_ALG_CONTENT_LENGTH`, `SIP_ALG_SDP_REWRITE`, `NAT_PRIVATE_SDP`, `NAT_MEDIA_SOURCE_MISMATCH`, `NAT_ONE_WAY_AUDIO` |
 | DDoS / flood | `DDOS_VOLUMETRIC`, `DOS_VOLUMETRIC`, `SYN_FLOOD`, `ICMP_FLOOD`, `REFLECTION_AMPLIFICATION`, `SIP_FLOOD_DISTRIBUTED` |
-| Rede | `ICMP_UNREACHABLE` |
+| WebRTC | `WEBRTC_ICE_FAILED`, `WEBRTC_ICE_AUTH_FAILED`, `WEBRTC_ICE_ROLE_CONFLICT`, `WEBRTC_STUN_UNREACHABLE`, `WEBRTC_TURN_AUTH_FAILED`, `WEBRTC_TURN_ALLOCATE_FAILED`, `WEBRTC_TURN_UNREACHABLE`, `WEBRTC_TURN_RELAY`, `WEBRTC_DTLS_FAILED`, `WEBRTC_DTLS_ALERT`, `WEBRTC_DTLS_NO_SRTP`, `WEBRTC_NO_MEDIA`, `WEBRTC_ONE_WAY_MEDIA`, `WEBRTC_SLOW_SETUP`, `WEBRTC_CONSENT_LOST`, `WEBRTC_NO_PUBLIC_CANDIDATE`, `WEBRTC_SDP_PROFILE_MISMATCH`, `WEBRTC_WS_UPGRADE_FAILED`, `WEBRTC_WS_CLOSED`, `WEBRTC_WSS_ENCRYPTED` |
+| Rede | `ICMP_UNREACHABLE`, `IP_FRAGMENTS_LOST` |
 | Registro | `REGISTER_FAILED`, `REGISTER_NO_RESPONSE` |
 | Segurança | `SEC_SCANNER`, `SEC_BRUTE_FORCE`, `SEC_ENUMERATION`, `SEC_OPTIONS_SWEEP`, `SEC_RATE`, `SEC_SCAN`, `SEC_TOLL_FRAUD` |
 
 Cada achado contém severidade, confiança e evidências associadas.
+
+## Laboratório de pcaps de teste
+
+`tests/lab.py` descreve 87 capturas sintéticas, uma por anomalia (sinalização, mídia, NAT, segurança, DDoS, WebRTC),
+mais capturas limpas que não podem gerar nenhum alerta e um cenário misto. Para cada uma está escrito o diagnóstico que o
+motor tem de dar; `tests/test_lab.py` falha se algo esperado não for detectado ou se aparecer qualquer outro código
+(alarme falso). Para gravar os arquivos e o gabarito em português:
+
+```bash
+python tools/make_lab_pcaps.py laboratorio/
+```
 
 ## Estrutura
 
@@ -212,12 +229,16 @@ Sip-network/
 │   ├── security.py         # ataques e fraude
 │   ├── kpi.py              # ASR, NER, SEER, ACD, PDD
 │   ├── network.py          # fluxos e ICMP
+│   ├── nat.py / ddos.py    # NAT e floods
+│   ├── websocket.py        # SIP sobre WebSocket
+│   ├── webrtc.py           # ICE/STUN, TURN, DTLS, SRTP
 │   ├── diagnostics.py      # regras de diagnóstico
 │   ├── ladder.py           # ladder SVG reutilizável
 │   ├── q850.py
 │   ├── config.py           # Thresholds
 │   └── engine.py           # ponto de entrada
 ├── tools/make_demo_pcap.py # gera uma captura de demonstração
+├── tools/make_lab_pcaps.py # grava o laboratório de pcaps de teste e o gabarito
 └── tests/
 ```
 
@@ -229,7 +250,7 @@ Sip-network/
 - Exportação PDF/HTML.
 - Banco de assinaturas de falha SIP por fabricante/SBC.
 - Leitura em streaming para capturas acima de 250 MB (hoje a captura inteira fica em memória).
-- SIP sobre WebSocket e ingestão HEP (Homer) para análise ao vivo.
+- Ingestão HEP (Homer) para análise ao vivo.
 - Autenticação integrada por usuário/perfil além do token opcional atual.
 - Captura ao vivo via `libpcap` em um agente separado com privilégios mínimos.
 - Comparação de capturas de dois pontos para calcular delay e localizar onde a perda nasce.
@@ -240,6 +261,9 @@ Sip-network/
 - RFC 3550 — RTP / RTCP e jitter
 - RFC 3398 / RFC 3326 — mapeamento SIP↔Q.850 e header Reason
 - RFC 4733 — eventos DTMF
+- RFC 7118 — SIP sobre WebSocket
+- RFC 8445 / RFC 7675 — ICE e consentimento; RFC 8489 / RFC 8656 — STUN e TURN
+- RFC 5764 / RFC 7983 — DTLS-SRTP e demultiplexação STUN/DTLS/RTP
 - RFC 6076 — métricas de desempenho SIP (SER, SEER, ISA, SRD)
 - RFC 3551 — RTP Audio/Video Profile
 - ITU-T G.107 — E-model

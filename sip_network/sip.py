@@ -6,7 +6,7 @@ from collections import defaultdict
 
 from .models import Packet, SipCall, SipMessage
 from .q850 import SIP_TO_Q850, cause_text, parse_reason
-from .sdp import parse_sdp
+from .sdp import parse_candidate, parse_sdp
 
 SIP_METHODS = {
     "INVITE", "ACK", "BYE", "CANCEL", "REGISTER", "OPTIONS", "INFO",
@@ -26,8 +26,18 @@ def _looks_like_sip(payload: bytes) -> bool:
     return token in SIP_METHODS
 
 
-def extract_sip_messages(packets: list[Packet]) -> list[SipMessage]:
+def extract_sip_messages(packets: list[Packet], websocket_sip: list[tuple[str, Packet, str]] | None = None,
+                         skip_tcp_flows: set[tuple] | None = None) -> list[SipMessage]:
+    """SIP over UDP, TCP and (when given) WebSocket. websocket_sip holds (raw message, anchor packet, transport)
+    already unframed by websocket.analyze_websockets; its TCP flows are passed in skip_tcp_flows so they are not
+    parsed twice as raw TCP."""
     out: list[SipMessage] = []
+    skip_tcp_flows = skip_tcp_flows or set()
+    for raw, anchor, transport in websocket_sip or []:
+        msg = parse_sip_message(raw, anchor)
+        if msg:
+            msg.transport = transport
+            out.append(msg)
     # UDP is message-oriented.
     for p in packets:
         if p.protocol == "UDP" and p.payload and (_looks_like_sip(p.payload) or p.src_port in (5060, 5061) or p.dst_port in (5060, 5061)):
@@ -43,7 +53,8 @@ def extract_sip_messages(packets: list[Packet]) -> list[SipMessage]:
     # TCP reassembly by directional stream. TLS/5061 remains encrypted and therefore intentionally unparsed.
     tcp_streams: dict[tuple, list[Packet]] = defaultdict(list)
     for p in packets:
-        if p.protocol == "TCP" and p.payload and (p.src_port in (5060, 5061) or p.dst_port in (5060, 5061) or _looks_like_sip(p.payload)):
+        if p.protocol == "TCP" and p.payload and p.flow4() not in skip_tcp_flows \
+                and (p.src_port in (5060, 5061) or p.dst_port in (5060, 5061) or _looks_like_sip(p.payload)):
             tcp_streams[(p.src_ip, p.dst_ip, p.src_port, p.dst_port)].append(p)
     for stream_packets in tcp_streams.values():
         for raw, anchor in _reassemble_tcp_sip(stream_packets):
@@ -451,10 +462,12 @@ def build_calls(messages: list[SipMessage], capture_end: float | None = None) ->
         for m in msgs:
             if not m.sdp: continue
             for media in m.sdp.media:
-                if media.media != "audio" or media.port <= 0: continue
-                endpoints.append({
+                if media.media not in ("audio", "video") or media.port <= 0: continue
+                ep = {
                     "ip": media.connection_ip,
                     "port": media.port,
+                    "media": media.media,
+                    "proto": media.proto,
                     "direction": media.direction,
                     "source_message": m.start_line,
                     "source_ip": m.src_ip,
@@ -465,7 +478,19 @@ def build_calls(messages: list[SipMessage], capture_end: float | None = None) ->
                     "ptime_ms": media.ptime_ms,
                     "rtcp_port": media.rtcp_port,
                     "rtcp_ip": media.rtcp_ip,
-                })
+                    "ice": bool(media.ice_ufrag or media.ice_candidates),
+                    "ice_ufrag": media.ice_ufrag,
+                    "fingerprint": media.fingerprint,
+                    "setup": media.setup,
+                    "candidates": [c for c in (parse_candidate(x) for x in media.ice_candidates) if c],
+                }
+                endpoints.append(ep)
+                # ICE: media flows between candidate addresses, not necessarily the c=/m= default.
+                for cand in ep["candidates"]:
+                    if cand["component"] != 1 or cand["mdns"] or (cand["address"], cand["port"]) == (ep["ip"], ep["port"]):
+                        continue
+                    endpoints.append({**ep, "ip": cand["address"], "port": cand["port"], "candidate_type": cand["type"],
+                                      "candidates": [], "from_candidate": True})
 
         negotiated: list[str] = []
         answer_sdp = next((m.sdp for m in msgs if not m.is_request and m.sdp and m.cseq_method == "INVITE" and m.cseq_number in initial_cseqs), None)

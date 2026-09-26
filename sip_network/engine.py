@@ -15,6 +15,8 @@ from .registrations import analyze_registrations, request_transactions
 from .rtp import analyze_rtp
 from .security import analyze_sip_security
 from .sip import build_calls, extract_sip_messages
+from .webrtc import analyze_webrtc, scan as scan_webrtc, secure_pairs, unwrap_turn
+from .websocket import analyze_websockets
 
 
 def analyze_bytes(data: bytes, filename: str = "capture", thresholds: Thresholds = DEFAULT_THRESHOLDS) -> AnalysisResult:
@@ -25,21 +27,27 @@ def analyze_bytes(data: bytes, filename: str = "capture", thresholds: Thresholds
     timestamps = [p.timestamp for p in packets if p.timestamp > 0]
     capture_start = min(timestamps) if timestamps else 0.0
     capture_end = max(timestamps) if timestamps else 0.0
-    sip_messages = extract_sip_messages(packets)
+    websockets = analyze_websockets(packets)
+    sip_messages = extract_sip_messages(packets, websockets["sip"], websockets["flows"])
     calls = build_calls(sip_messages, capture_end)
-    streams = analyze_rtp(packets, calls, thresholds.rtp_gap_ms)
+    media_packets = unwrap_turn(packets)
+    webrtc_state = scan_webrtc(media_packets)
+    streams = analyze_rtp(media_packets, calls, thresholds.rtp_gap_ms, secure_pairs(webrtc_state))
+    webrtc = analyze_webrtc(webrtc_state, streams, calls, websockets, capture_end, thresholds)
     transactions = request_transactions(sip_messages)
     registrations = analyze_registrations(sip_messages)
     security = analyze_sip_security(sip_messages, transactions, calls, thresholds)
     icmp_errors = analyze_icmp_errors(packets)
     nat = analyze_nat(sip_messages, calls, streams, thresholds)
     ddos = analyze_ddos(packets, sip_messages, streams, thresholds)
-    diagnostics = diagnose(calls, streams, thresholds, capture_end, security, icmp_errors, registrations, nat, ddos["events"])
+    lost_fragments = sum(1 for p in packets if "fragmento IP sem remontagem completa" in p.parse_notes)
+    diagnostics = diagnose(calls, streams, thresholds, capture_end, security, icmp_errors, registrations, nat, ddos["events"],
+                           webrtc["findings"], lost_fragments)
     network = analyze_network(packets)
     kpis = compute_kpis(calls, streams, sip_messages, registrations)
     kpis["icmp_errors"] = icmp_errors
     kpis["traffic_timeline"] = ddos["timeline"]
-    kpis["charts"] = build_charts(calls, streams, diagnostics, security, nat, ddos["events"])
+    kpis["charts"] = build_charts(calls, streams, diagnostics, security, nat, ddos["events"], webrtc["findings"])
     notes = sorted({note for p in packets for note in p.parse_notes})
     return AnalysisResult(
         capture={
@@ -52,6 +60,7 @@ def analyze_bytes(data: bytes, filename: str = "capture", thresholds: Thresholds
             "sip_messages": len(sip_messages),
             "sip_calls": len(calls),
             "rtp_streams": len(streams),
+            "webrtc_sessions": len(webrtc["sessions"]),
             "ipv4_packets": sum(1 for p in packets if p.ip_version == 4),
             "ipv6_packets": sum(1 for p in packets if p.ip_version == 6),
             "vlan_packets": sum(1 for p in packets if p.vlan_ids),
@@ -60,7 +69,7 @@ def analyze_bytes(data: bytes, filename: str = "capture", thresholds: Thresholds
         },
         calls=calls, rtp_streams=streams, diagnostics=diagnostics,
         network_flows=network, security=security, kpis=kpis, registrations=registrations,
-        nat=nat, ddos=ddos["events"],
+        nat=nat, ddos=ddos["events"], webrtc=webrtc,
     )
 
 
@@ -80,7 +89,7 @@ def _pie(counter: Counter, labels: dict[str, str] | None = None, key: str = "key
     return [{key: k, "label": (labels or {}).get(k, str(k)), "value": v} for k, v in counter.most_common() if v]
 
 
-def build_charts(calls, streams, diagnostics, security, nat, ddos) -> dict[str, list[dict[str, Any]]]:
+def build_charts(calls, streams, diagnostics, security, nat, ddos, webrtc=()) -> dict[str, list[dict[str, Any]]]:
     """Ready-to-plot {key,label,value} series for donut/pie charts, so every client draws the same numbers."""
     mos_bands = Counter()
     for s in streams:
@@ -98,6 +107,7 @@ def build_charts(calls, streams, diagnostics, security, nat, ddos) -> dict[str, 
         "security_by_type": _pie(Counter(a["type"] for a in security), SECURITY_LABELS),
         "nat_by_type": _pie(Counter(f["type"] for f in nat), {f["type"]: f["title"] for f in nat}),
         "ddos_by_type": _pie(Counter(e["type"] for e in ddos), {e["type"]: e["title"] for e in ddos}),
+        "webrtc_by_type": _pie(Counter(f["type"] for f in webrtc), {f["type"]: f["title"] for f in webrtc}),
     }
 
 

@@ -28,17 +28,20 @@ OUTCOME_HINT = {
 
 
 CATEGORY_LABELS = {"sinalizacao": "Sinalização SIP", "midia": "Mídia/áudio", "nat": "NAT", "seguranca": "Segurança",
-                   "ddos": "DDoS/flood", "rede": "Rede/QoS", "registro": "Registro"}
+                   "ddos": "DDoS/flood", "rede": "Rede/QoS", "registro": "Registro",
+                   "webrtc": "WebRTC"}
 
 
 def category_of(code: str) -> str:
+    if code.startswith("WEBRTC_"):
+        return "webrtc"
     if code.startswith("SEC_"):
         return "seguranca"
     if code.startswith(("NAT_", "SIP_ALG", "DEVICE_BEHIND_NAT")):
         return "nat"
     if code.startswith("REGISTER_"):
         return "registro"
-    if code.startswith("ICMP_") or code.endswith("_DSCP"):
+    if code.startswith(("ICMP_", "IP_")) or code.endswith("_DSCP"):
         return "rede"
     if code.startswith(("RTP_", "RTCP_", "MEDIA_", "LOW_MOS", "ONE_WAY", "NO_RTP")):
         return "midia"
@@ -181,7 +184,7 @@ def _stream_rules(s: RtpStream, th: Thresholds) -> list[Diagnostic]:
         add("info", "MEDIA_DEST_MISMATCH", "RTP enviado para endereço fora do SDP",
             f"O fluxo vai para {s.dst_ip}:{s.dst_port}, que não foi anunciado no SDP. Indica NAT/latching (RTP simétrico) ou SBC reescrevendo mídia.",
             "medium", {"dst": f"{s.dst_ip}:{s.dst_port}"})
-    if s.packets >= 50 and s.dscp is not None and s.dscp != th.expected_rtp_dscp:
+    if s.packets >= 50 and s.dscp is not None and s.dscp != th.expected_rtp_dscp and not s.webrtc_session:
         add("info", "RTP_DSCP", "RTP sem marcação de QoS esperada",
             f"O fluxo está marcado como {_dscp(s.dscp)} em vez de {_dscp(th.expected_rtp_dscp)}. Sem priorização, a voz disputa fila com dados em links congestionados.",
             "high", {"dscp": s.dscp, "values": s.dscp_values})
@@ -199,12 +202,18 @@ def _stream_rules(s: RtpStream, th: Thresholds) -> list[Diagnostic]:
 def diagnose(calls: list[SipCall], streams: list[RtpStream], th: Thresholds = DEFAULT_THRESHOLDS,
              capture_end: float | None = None, security: list[dict[str, Any]] | None = None,
              icmp_errors: list[dict[str, Any]] | None = None, registrations: list[dict[str, Any]] | None = None,
-             nat: list[dict[str, Any]] | None = None, ddos: list[dict[str, Any]] | None = None) -> list[Diagnostic]:
+             nat: list[dict[str, Any]] | None = None, ddos: list[dict[str, Any]] | None = None,
+             webrtc: list[dict[str, Any]] | None = None, lost_fragments: int = 0) -> list[Diagnostic]:
     d: list[Diagnostic] = []
     by_call: dict[str, list[RtpStream]] = defaultdict(list)
     for s in streams:
         if s.call_id: by_call[s.call_id].append(s)
+    # Calls placed by an attacking source are the attack itself (already one SEC_* alert), not hundreds of call failures.
+    attack_sources = {a["source_ip"] for a in security or [] if a["type"] in ("brute_force", "scanner", "enumeration", "rate", "scan")}
+    flood_sources = {ip for e in ddos or [] if e["type"] == "SIP_FLOOD_DISTRIBUTED" for ip in e.get("source_ips", [])}
     for c in calls:
+        if c.caller_ip in attack_sources or c.caller_ip in flood_sources:
+            continue
         d.extend(_call_rules(c, by_call.get(c.call_id, []), th, capture_end))
     for s in streams:
         d.extend(_stream_rules(s, th))
@@ -212,7 +221,8 @@ def diagnose(calls: list[SipCall], streams: list[RtpStream], th: Thresholds = DE
     sip_dscp = defaultdict(int)
     for c in calls:
         for m in c.messages:
-            if m.dscp is not None and m.dscp not in th.expected_sip_dscp:
+            # Browsers cannot mark WebSocket signalling: no actionable QoS finding there.
+            if m.dscp is not None and m.dscp not in th.expected_sip_dscp and m.transport != "WS":
                 sip_dscp[(m.src_ip, m.dscp)] += 1
     for (ip, value), n in sip_dscp.items():
         if n >= 5:
@@ -228,7 +238,7 @@ def diagnose(calls: list[SipCall], streams: list[RtpStream], th: Thresholds = DE
                             "Porta fechada, serviço parado ou ACL/firewall bloqueando.", "high", evidence=e))
 
     # Registration failures from a source already flagged as an attacker are the attack, not a customer fault.
-    attackers = {a["source_ip"] for a in security or [] if a["type"] in ("brute_force", "scanner", "enumeration")}
+    attackers = {a["source_ip"] for a in security or [] if a["type"] in ("brute_force", "scanner", "enumeration")} | flood_sources
     failed_by_src: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for r in registrations or []:
         if r["source_ip"] in attackers or r["state"] not in ("failed", "no_response"):
@@ -262,6 +272,16 @@ def diagnose(calls: list[SipCall], streams: list[RtpStream], th: Thresholds = DE
     for e in ddos or []:
         d.append(Diagnostic(e["severity"], e["type"], e["title"], e["detail"], "medium", None, None,
                             {k: v for k, v in e.items() if k not in ("detail", "severity", "title", "type")}, "ddos"))
+    for f in webrtc or []:
+        d.append(Diagnostic(f["severity"], f["type"], f["title"], f["detail"], "high" if f["severity"] == "critical" else "medium",
+                            f.get("call_id"), None, {"source_ip": f.get("source_ip"), "session": f.get("session"), **f.get("evidence", {})},
+                            "webrtc"))
+    if lost_fragments >= th.fragments_lost_warning:
+        d.append(Diagnostic("warning", "IP_FRAGMENTS_LOST", "Fragmentos IP perdidos",
+                            f"{lost_fragments} pacote(s) chegaram fragmentados sem todas as partes. Em SIP por UDP isso acontece com INVITE "
+                            "grande (SDP com muitos codecs/candidatos) acima do MTU: se um fragmento se perde, a mensagem inteira some "
+                            "e a chamada não completa. Usar SIP por TCP, reduzir o SDP ou corrigir o MTU/firewall que descarta fragmentos.",
+                            "medium", evidence={"packets": lost_fragments}))
     for x in d:
         if not x.category:
             x.category = category_of(x.code)

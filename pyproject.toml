@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sip-network"
-version = "2.2.0"
+version = "2.3.0"
 description = "Passive SIP/SDP/RTP/RTCP analyzer for PCAP and PCAPNG"
 requires-python = ">=3.11"
 # The analysis engine uses only the standard library; the Streamlit UI is an optional extra.

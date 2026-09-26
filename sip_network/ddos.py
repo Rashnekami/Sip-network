@@ -6,7 +6,6 @@ excluded from the volumetric count: a busy SBC legitimately receives thousands o
 """
 from __future__ import annotations
 
-import statistics
 from collections import Counter, defaultdict
 from typing import Any
 
@@ -93,8 +92,7 @@ def analyze_ddos(packets: list[Packet], sip_messages: list[SipMessage], streams:
         for dst, rates in counters[kind].items():
             for a, b in _runs(rates, minimum, min_len):
                 if kind == "volumetric":
-                    outside = [rates.get(s, 0.0) for s in range(min(seconds), max(seconds) + 1) if not a <= s <= b]
-                    baseline = statistics.median(outside) if outside else 0.0
+                    baseline = _median_outside(rates, a, b, span)
                     peak = max(rates.get(s, 0.0) for s in range(a, b + 1))
                     if baseline and peak < baseline * th.ddos_baseline_factor:
                         continue
@@ -202,16 +200,36 @@ def analyze_ddos(packets: list[Packet], sip_messages: list[SipMessage], streams:
     return {"events": events, "timeline": _timeline(total, total_bytes)}
 
 
+def _median_outside(rates: dict[int, float], a: int, b: int, span: int) -> float:
+    """Median rate of the capture seconds outside [a, b], counting silent seconds as 0 without iterating over them
+    (a single packet with a corrupt timestamp can make the span years long)."""
+    values = sorted(v for s, v in rates.items() if not a <= s <= b)
+    zeros = max(0, span - (b - a + 1) - len(values))
+    n = zeros + len(values)
+    if n == 0:
+        return 0.0
+
+    def at(i: int) -> float:
+        return 0.0 if i < zeros else values[i - zeros]
+    return at(n // 2) if n % 2 else (at(n // 2 - 1) + at(n // 2)) / 2
+
+
 def _timeline(total: dict[int, float], total_bytes: dict[int, float]) -> list[dict[str, Any]]:
-    """Packets and Mbit/s per second across the capture, downsampled for a line chart."""
+    """Packets and Mbit/s per second across the capture, downsampled for a line chart. Buckets are built from the
+    seconds that have traffic, so a bogus timestamp far away costs nothing."""
     if not total:
         return []
     first, last = min(total), max(total)
     step = max(1, -(-(last - first + 1) // TIMELINE_POINTS))
-    out = []
-    for start in range(first, last + 1, step):
-        secs = range(start, min(start + step, last + 1))
-        pk = max(total.get(s, 0.0) for s in secs)
-        by = max(total_bytes.get(s, 0.0) for s in secs)
-        out.append({"t": float(start), "pps": round(pk, 1), "mbps": round(by * 8 / 1e6, 3)})
-    return out
+    buckets: dict[int, list[float]] = {}
+    for sec, pk in total.items():
+        k = (sec - first) // step
+        cur = buckets.setdefault(k, [0.0, 0.0])
+        cur[0] = max(cur[0], pk); cur[1] = max(cur[1], total_bytes.get(sec, 0.0))
+    n = (last - first) // step + 1
+    if n > 4 * TIMELINE_POINTS:  # sparse: only the buckets with traffic
+        keys = sorted(buckets)
+    else:
+        keys = range(n)
+    return [{"t": float(first + k * step), "pps": round(buckets.get(k, [0.0, 0.0])[0], 1),
+             "mbps": round(buckets.get(k, [0.0, 0.0])[1] * 8 / 1e6, 3)} for k in keys]

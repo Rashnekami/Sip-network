@@ -25,6 +25,7 @@
   próprio; agora o ataque aparece uma vez, no alerta de segurança/DDoS.
 - Troca de SSRC contava áudio e vídeo do mesmo 5-tupla (BUNDLE) como troca.
 - RTCP de fluxos SRTP (blocos criptografados) não é mais lido como perda/jitter remotos.
+- Um pacote com timestamp corrompido (anos à frente) travava a análise de DDoS/linha do tempo por minutos.
 
 ### Alterado
 

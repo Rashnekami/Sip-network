@@ -9,7 +9,59 @@ No painel do Supabase do projeto: **Edge Functions → Secrets** (ou peça ao Lo
 - `SIP_NETWORK_API_URL` = `https://SEU-DOMINIO` (sem barra no final)
 - `SIP_NETWORK_API_TOKEN` = o token da API
 
-## 2. Prompt para colar no Lovable
+## 2. Prompt atual: módulo ao lado do post-it na tela de login (teste público)
+
+Usa a Edge Function pública (sem login, 30 MB, 10 análises por hora por IP) e os campos da versão 2.2 (`nat`, `ddos`, `kpis.charts`).
+
+> Ajuste o Analisador SIP (PCAP) que criamos. Três mudanças: posição, visual e novas seções.
+>
+> **1. Posição (mais importante)**
+> - A rota inicial `/` volta a ser a tela de login do CheckTecnico, exatamente como era antes. O analisador não pode abrir antes do login nem substituir a página inicial. Remova-o da rota inicial.
+> - Na tela de login, coloque um cartão "Analisador SIP (PCAP)" ao lado do post-it, com o mesmo tamanho, sombra e cantos do post-it, lado a lado no desktop e empilhado abaixo dele no celular. Não mexa no formulário de login nem no post-it.
+> - O cartão mostra: ícone (lucide `Activity`), título "Analisador SIP", subtítulo "Envie um .pcap e veja chamadas, áudio, NAT e ataques", uma área de arrastar e soltar e a nota "Grátis para teste · até 30 MB · 10 análises por hora".
+> - O uso continua público, sem login. Ao soltar o arquivo, o cartão mostra o progresso ("Enviando…", "Analisando chamadas…", "Montando relatório…"). Quando a resposta chega, os resultados abrem num painel grande (Dialog em tela cheia no celular e com 90% da largura no desktop) por cima da tela de login. Ao fechar o painel, o usuário volta ao login.
+> - Continue usando a Edge Function `analisar-pcap` que já existe, sem mudar as proteções: limite de 30 MB, 10 análises por hora por IP e o token só dentro da Edge Function, nunca no navegador.
+>
+> **2. Visual**
+> - Siga as cores, a fonte e os componentes (shadcn) do CheckTecnico, funcionando no tema claro e no escuro. Use cantos `rounded-2xl`, sombras suaves, bastante espaço e ícones lucide.
+> - Use as mesmas cores de severidade em todo o painel: critical = vermelho (`#ef4444`), warning = âmbar (`#f59e0b`) e info = azul (`#3b82f6`). OK = verde (`#22c55e`).
+> - No topo do painel: nome do arquivo, duração da captura (`capture.duration_s`), pacotes, botão "Baixar JSON" e botão "Nova análise".
+> - Mostre uma faixa de KPIs em cartões com ícone e valor grande:
+>   - Chamadas: `kpis.calls.attempts`.
+>   - ASR %: verde ≥ 50, âmbar entre 30 e 50, vermelho abaixo de 30.
+>   - NER %.
+>   - PDD médio: `kpis.calls.pdd_avg_ms` em segundos.
+>   - ACD: `kpis.calls.acd_s`.
+>   - MOS médio: `kpis.media.mos_avg`, verde ≥ 4, âmbar ≥ 3,6, vermelho abaixo disso.
+>   - Críticos: quantidade de `diagnostics` com severity critical.
+> - Enquanto analisa, mostre skeletons. Se uma seção não tiver nada, mostre um estado vazio positivo, com check verde e "Nenhum problema de NAT encontrado", em vez de tabela vazia.
+> - As tabelas têm cabeçalho fixo, linhas zebradas, busca e badges coloridos por severidade e por desfecho.
+>
+> **3. Gráficos redondos (rosca)**
+> A API já entrega as séries prontas em `kpis.charts`. Cada série é uma lista de `{key, label, value}`. Use `recharts` (PieChart com `innerRadius`, ou seja, rosca), com o total no centro, legenda embaixo e tooltip com valor e %. Se a série estiver vazia, esconda o gráfico. Crie um componente `DonutChart` reutilizável.
+> - Aba **Visão geral**:
+>   - Grade de roscas com "Achados por severidade" (`diagnostics_by_severity`, cores de severidade pelo `key`).
+>   - "Problemas por área" (`problems_by_category`).
+>   - "Desfecho das chamadas" (`call_outcomes`: answered verde, busy/no_answer/cancelled cinza, o resto vermelho).
+>   - "Códigos de erro SIP" (`sip_error_codes`).
+>   - "Qualidade de voz (MOS)" (`mos_bands`: otimo verde, bom verde-claro, regular âmbar, ruim vermelho).
+>   - Abaixo, os 5 achados mais graves.
+> - Aba **NAT**: rosca `nat_by_type`.
+> - Aba **DDoS / Flood**: rosca `ddos_by_type` e um gráfico de linha (recharts LineChart) com `kpis.traffic_timeline`: eixo X é `t`, com segundos Unix formatados como hora; eixo Y é `pps`. Pinte de vermelho as faixas de tempo de cada evento de `ddos` (`start` a `end`) com ReferenceArea.
+> - Aba **Segurança**: rosca `security_by_type`.
+>
+> **4. Abas do painel**
+> - Visão geral.
+> - Achados: `diagnostics`, com filtro por severidade e por área (`category`: sinalizacao=Sinalização, midia=Mídia/áudio, nat=NAT, seguranca=Segurança, ddos=DDoS/flood, rede=Rede/QoS, registro=Registro). Cada achado vira um cartão com borda colorida, `title`, `detail`, `code` e `call_id`, e um "ver evidências" que expande o `evidence` em JSON formatado.
+> - Chamadas: a tabela como já está. Ao clicar, abre o `ladder_svg` num container com scroll horizontal, os achados da chamada e os `media_endpoints`.
+> - Qualidade de áudio: `rtp_streams`, com MOS < 3,6 em âmbar e < 3,1 em vermelho.
+> - **NAT (novo)**: lista de `nat` em cartões por severidade, com `title`, `detail`, `source_ip`, `call_id` e evidências. No topo, uma explicação curta: "NAT e SIP ALG são a causa nº 1 de áudio mudo, unidirecional e queda de chamadas".
+> - **DDoS / Flood (novo)**: os gráficos acima e uma tabela de `ddos` com `title`, `target_ip`:`target_port`, `duration_s`, `peak_pps`, `peak_mbps`, `sources` e `severity`. Ao clicar num evento, mostre `detail` e a lista `top_sources` (ip e pacotes).
+> - Segurança (`security`), Registros (`registrations`) e Rede (`kpis.icmp_errors`).
+>
+> Traduza os `type` de NAT e DDoS usando o `title` que já vem em cada item. Não invente textos.
+
+## 2b. Prompt antigo: página interna com login
 
 > Crie uma nova página "Análise SIP (PCAP)" no menu de ferramentas.
 >

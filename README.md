@@ -24,7 +24,12 @@ Pensado para técnicos de NOC de operadoras VoIP, como módulo do checktecnico o
 - RTCP SR/RR e RTT quando os campos LSR/DLSR permitem cálculo.
 - MOS/R-Factor operacional por E-model, sem inventar one-way delay quando ele não é mensurável.
 - Diagnóstico de RTP ausente, one-way audio, packet loss, jitter, reorder e duplicação.
-- NAT analisado por `Contact`, endereço observado e SDP, sem falsos positivos por simples roteamento entre sub-redes privadas.
+- NAT: aparelho atrás de NAT/CGNAT, falta de rport, registro longo demais para o NAT, assinatura de SIP ALG (Content-Length
+  divergente e SDP reescrito pela metade), IP privado no SDP, RTP chegando de endereço fora do SDP e áudio unidirecional por NAT.
+  Sem falsos positivos por simples roteamento entre sub-redes privadas.
+- DDoS/flood por destino e por segundo: volumétrico (ignora RTP de chamadas), SYN flood, ICMP flood, reflexão/amplificação
+  (DNS, NTP, SSDP, Memcached, CLDAP…) e flood SIP distribuído, com origens, pico em pps/Mbit/s e duração.
+- Séries prontas para gráficos de rosca (`kpis.charts`) e linha do tempo de tráfego.
 - Remontagem de fragmentos IPv4/IPv6 (INVITE com SDP grande) e leitura de DSCP.
 - Modelo de diálogo RFC 3261: forking, ACK por diálogo, re-INVITE, hold/resume, REFER, desafios 401/407.
 - Desfecho da chamada (atendida, ocupado, cancelada, sem resposta, 5xx, codec incompatível…), PDD, setup, ring, duração,
@@ -180,7 +185,8 @@ Exemplos:
 |---|---|
 | Sinalização | `SIP_FINAL_FAILURE`, `SIP_NO_RESPONSE`, `SIP_MISSING_ACK`, `SIP_DROP_32S`, `SIP_SESSION_TIMER_DROP`, `SIP_HIGH_PDD`, `SIP_AUTH_LOOP`, `SIP_RETRANSMISSIONS`, `SIP_FORKED_ANSWER`, `SIP_SHORT_CALL`, `SIP_TERMINATION_NOT_SEEN`, `SIP_HOLD`, `SIP_TRANSFER`, `SIP_DSCP` |
 | Mídia | `NO_RTP_AFTER_ANSWER`, `ONE_WAY_AUDIO`, `MEDIA_START_DELAY`, `RTP_AFTER_BYE`, `RTP_PACKET_LOSS`, `RTCP_REMOTE_LOSS`, `RTP_JITTER`, `LOW_MOS`, `RTP_GAP`, `RTP_PT_NOT_NEGOTIATED`, `MEDIA_DEST_MISMATCH`, `RTP_SSRC_CHANGE`, `RTP_DSCP`, `RTP_REORDER`, `RTP_DUPLICATES` |
-| NAT | `NAT_CONTACT_MISMATCH`, `PRIVATE_SDP_OVER_PUBLIC_SIGNALING` |
+| NAT | `DEVICE_BEHIND_NAT`, `NAT_NO_RPORT`, `NAT_REGISTER_EXPIRES_TOO_LONG`, `SIP_ALG_CONTENT_LENGTH`, `SIP_ALG_SDP_REWRITE`, `NAT_PRIVATE_SDP`, `NAT_MEDIA_SOURCE_MISMATCH`, `NAT_ONE_WAY_AUDIO` |
+| DDoS / flood | `DDOS_VOLUMETRIC`, `DOS_VOLUMETRIC`, `SYN_FLOOD`, `ICMP_FLOOD`, `REFLECTION_AMPLIFICATION`, `SIP_FLOOD_DISTRIBUTED` |
 | Rede | `ICMP_UNREACHABLE` |
 | Registro | `REGISTER_FAILED`, `REGISTER_NO_RESPONSE` |
 | Segurança | `SEC_SCANNER`, `SEC_BRUTE_FORCE`, `SEC_ENUMERATION`, `SEC_OPTIONS_SWEEP`, `SEC_RATE`, `SEC_SCAN`, `SEC_TOLL_FRAUD` |

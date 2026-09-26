@@ -32,9 +32,12 @@ def extract_sip_messages(packets: list[Packet]) -> list[SipMessage]:
     for p in packets:
         if p.protocol == "UDP" and p.payload and (_looks_like_sip(p.payload) or p.src_port in (5060, 5061) or p.dst_port in (5060, 5061)):
             text = p.payload.decode("utf-8", "replace")
-            for raw in _split_sip_messages(text):
+            raws = _split_sip_messages(text)
+            for raw in raws:
                 msg = parse_sip_message(raw, p)
                 if msg:
+                    if len(raws) == 1:
+                        _measure_body(msg, p.payload)
                     out.append(msg)
 
     # TCP reassembly by directional stream. TLS/5061 remains encrypted and therefore intentionally unparsed.
@@ -50,6 +53,17 @@ def extract_sip_messages(packets: list[Packet]) -> list[SipMessage]:
 
     out.sort(key=lambda m: (m.timestamp, m.packet_number))
     return out
+
+
+def _measure_body(msg: SipMessage, payload: bytes) -> None:
+    cl = msg.header("content-length")
+    if cl is None or not cl.strip().isdigit():
+        return
+    sep = payload.find(b"\r\n\r\n")
+    if sep < 0:
+        return
+    msg.content_length_declared = int(cl.strip())
+    msg.body_bytes_actual = len(payload) - sep - 4
 
 
 def _unwrap32(seq: int, reference: int) -> int:

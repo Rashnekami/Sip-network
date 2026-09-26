@@ -91,8 +91,8 @@ cols[4].metric("ACD", fmt(kc.get("acd_s"), " s"))
 cols[5].metric("MOS médio", fmt(km.get("mos_avg")))
 cols[6].metric("Críticos", sum(1 for d in result.diagnostics if d.severity == "critical"))
 
-tabs = st.tabs(["Resumo", "Chamadas SIP", "RTP / Qualidade", "Registros", "Diagnósticos", "Segurança SIP", "Rede"])
-summary, calls_tab, rtp_tab, reg_tab, diag_tab, sec_tab, net_tab = tabs
+tabs = st.tabs(["Resumo", "Chamadas SIP", "RTP / Qualidade", "Registros", "Diagnósticos", "NAT", "DDoS / Flood", "Segurança SIP", "Rede"])
+summary, calls_tab, rtp_tab, reg_tab, diag_tab, nat_tab, ddos_tab, sec_tab, net_tab = tabs
 
 with summary:
     c1, c2 = st.columns([2, 1])
@@ -188,6 +188,24 @@ with diag_tab:
         st.markdown(f'<div class="sn-{d.severity}"><b>{d.code} — {d.title}</b><br>{d.detail}<br><small>Call-ID: {d.call_id or "—"} | Stream: {d.stream_id or "—"} | confiança: {d.confidence}</small></div>', unsafe_allow_html=True)
         if d.evidence:
             st.json(d.evidence, expanded=False)
+
+with nat_tab:
+    if result.nat:
+        for f in result.nat:
+            st.markdown(f'<div class="sn-{f["severity"]}"><b>{f["title"]}</b><br>{f["detail"]}<br><small>{f["type"]} · origem: {f["source_ip"] or "—"} · Call-ID: {f["call_id"] or "—"}</small></div>', unsafe_allow_html=True)
+    else:
+        st.success("Nenhum problema de NAT identificado (SIP ALG, rport, SDP privado, mídia de endereço inesperado).")
+
+with ddos_tab:
+    if result.ddos:
+        st.dataframe(pd.DataFrame([{k: v for k, v in e.items() if k != "top_sources"} for e in result.ddos]), use_container_width=True, hide_index=True)
+        for e in result.ddos:
+            st.markdown(f'<div class="sn-{e["severity"]}"><b>{e["title"]} → {e["target_ip"]}</b><br>{e["detail"]}</div>', unsafe_allow_html=True)
+    else:
+        st.success("Nenhum flood ou DDoS identificado (volumétrico, SYN, ICMP, reflexão/amplificação ou flood SIP distribuído).")
+    if result.kpis.get("traffic_timeline"):
+        st.subheader("Tráfego por segundo (pico)")
+        st.line_chart(pd.DataFrame(result.kpis["traffic_timeline"]).set_index("t")[["pps"]])
 
 with sec_tab:
     if result.security:

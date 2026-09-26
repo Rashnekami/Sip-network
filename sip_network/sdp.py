@@ -26,6 +26,7 @@ def parse_sdp(body: str) -> SdpSession | None:
     if "m=" not in body:
         return None
     session_ip = None
+    origin_ip = None
     media: list[SdpMedia] = []
     current: SdpMedia | None = None
     pending_rtpmap: dict[int, tuple[str, int, int]] = {}
@@ -36,6 +37,10 @@ def parse_sdp(body: str) -> SdpSession | None:
         if not line or len(line) < 2 or line[1] != "=":
             continue
         kind, value = line[0], line[2:]
+        if kind == "o":
+            parts = value.split()
+            origin_ip = parts[5] if len(parts) >= 6 else None
+            continue
         if kind == "c":
             parts = value.split()
             ip = parts[-1].split("/")[0] if parts else None
@@ -92,7 +97,7 @@ def parse_sdp(body: str) -> SdpSession | None:
     for m in media:
         if not m.connection_ip:
             m.connection_ip = session_ip
-    return SdpSession(session_ip, media)
+    return SdpSession(session_ip, media, origin_ip)
 
 
 def codec_for_payload(session: SdpSession | None, pt: int) -> SdpCodec | None:

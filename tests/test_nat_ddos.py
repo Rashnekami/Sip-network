@@ -149,6 +149,7 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(ch["call_outcomes"], [{"key": "answered", "label": "Atendida", "value": 1}])
         self.assertIn("NAT", {x["label"] for x in ch["diagnostics_by_category"]})
         self.assertTrue(all(d.category for d in r.diagnostics))
+        self.assertEqual({x["label"] for x in ch["nat_by_type"]}, {f["title"] for f in r.nat})
         d = r.to_dict()
         self.assertEqual(d["schema_version"], "2.2")
         self.assertIn("nat", d); self.assertIn("ddos", d)

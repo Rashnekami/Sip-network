@@ -71,6 +71,10 @@ OUTCOME_LABELS = {"answered": "Atendida", "busy": "Ocupado", "no_answer": "Não 
                   "no_response": "Sem resposta", "client_error": "Erro do cliente", "global_failure": "Falha global",
                   "redirected": "Redirecionada", "in_progress": "Em andamento"}
 
+SECURITY_LABELS = {"scanner": "Scanner SIP", "brute_force": "Força bruta de senha", "enumeration": "Enumeração de ramais",
+                   "options_sweep": "Varredura OPTIONS", "rate": "Flood por método", "scan": "Varredura de destinos",
+                   "toll_fraud": "Fraude internacional"}
+
 
 def _pie(counter: Counter, labels: dict[str, str] | None = None, key: str = "key") -> list[dict[str, Any]]:
     return [{key: k, "label": (labels or {}).get(k, str(k)), "value": v} for k, v in counter.most_common() if v]
@@ -91,9 +95,9 @@ def build_charts(calls, streams, diagnostics, security, nat, ddos) -> dict[str, 
         "call_outcomes": _pie(Counter(c.outcome for c in calls if c.outcome), OUTCOME_LABELS),
         "sip_error_codes": _pie(final_codes),
         "mos_bands": _pie(mos_bands, {"otimo": "Ótimo (≥ 4,0)", "bom": "Bom (3,6–4,0)", "regular": "Regular (3,1–3,6)", "ruim": "Ruim (< 3,1)"}),
-        "security_by_type": _pie(Counter(a["type"] for a in security)),
-        "nat_by_type": _pie(Counter(f["type"] for f in nat)),
-        "ddos_by_type": _pie(Counter(e["type"] for e in ddos)),
+        "security_by_type": _pie(Counter(a["type"] for a in security), SECURITY_LABELS),
+        "nat_by_type": _pie(Counter(f["type"] for f in nat), {f["type"]: f["title"] for f in nat}),
+        "ddos_by_type": _pie(Counter(e["type"] for e in ddos), {e["type"]: e["title"] for e in ddos}),
     }
 
 

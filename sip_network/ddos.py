@@ -48,7 +48,7 @@ def _event(kind: str, sev: str, title: str, target: str, a: int, b: int, rates: 
 
 def analyze_ddos(packets: list[Packet], sip_messages: list[SipMessage], streams: list[RtpStream],
                  th: Thresholds = DEFAULT_THRESHOLDS) -> dict[str, Any]:
-    media = {(s.src_ip, s.src_port, s.dst_ip, s.dst_port) for s in streams if s.call_id}
+    media = {(s.src_ip, s.src_port, s.dst_ip, s.dst_port) for s in streams if s.call_id or s.webrtc_session}
     # counters[kind][dst][second] = packets; bytes only for volumetric/reflection.
     counters: dict[str, dict[str, dict[int, float]]] = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
     vol_bytes: dict[str, dict[int, float]] = defaultdict(lambda: defaultdict(float))
@@ -188,7 +188,7 @@ def analyze_ddos(packets: list[Packet], sip_messages: list[SipMessage], streams:
                                  f"{dst} recebeu até {max(rates.get(s, 0) for s in range(a, b + 1)):.0f} requisições SIP/s por {b - a + 1}s de {who} "
                                  f"({methods}). O PBX/SBC gasta CPU respondendo e chamadas legítimas sofrem timeout. Ação: rate limit (pike/fail2ban), "
                                  "ACL só com IPs de tronco e clientes, e SBC na borda.",
-                                 methods=dict(amp_service[key]), distributed=distributed))
+                                 methods=dict(amp_service[key]), distributed=distributed, source_ips=sorted(srcs)))
         else:
             if any(e["target_ip"] == dst and e["start"] <= b + 1 and a <= e["end"] for e in events):
                 continue  # a specific flood already explains this volume

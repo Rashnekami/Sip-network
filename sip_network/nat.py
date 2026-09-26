@@ -102,8 +102,10 @@ def analyze_nat(messages: list[SipMessage], calls: list[SipCall], streams: list[
     alg_seen: set[str] = set()
     for m in messages:
         src = m.src_ip or "?"
-        if m.content_length_declared is not None and m.body_bytes_actual is not None \
-                and m.content_length_declared != m.body_bytes_actual and src not in alg_seen:
+        # An ALG changes an IP string inside the SDP, so the body grows or shrinks by a few bytes. Big differences are
+        # truncated/fragmented or malformed messages, not an ALG.
+        if m.content_length_declared is not None and m.body_bytes_actual is not None and m.sdp is not None \
+                and 0 < abs(m.content_length_declared - m.body_bytes_actual) <= 30 and src not in alg_seen:
             alg_seen.add(src)
             out.append(_finding("critical", "SIP_ALG_CONTENT_LENGTH", "SIP ALG reescrevendo mensagens",
                                 f"Mensagem de {src} declara Content-Length {m.content_length_declared} mas carrega {m.body_bytes_actual} bytes. "
@@ -111,7 +113,9 @@ def analyze_nat(messages: list[SipMessage], calls: list[SipCall], streams: list[
                                 src, m.call_id, declared=m.content_length_declared, actual=m.body_bytes_actual, message=m.start_line))
         if m.sdp and m.sdp.origin_ip and src not in alg_seen:
             conn = m.sdp.connection_ip or next((x.connection_ip for x in m.sdp.media if x.connection_ip), None)
-            if conn and is_private(m.sdp.origin_ip) and is_public(conn) and conn == m.src_ip:
+            origin = _ip(m.sdp.origin_ip)
+            # Browsers (WebRTC) always write o=127.0.0.1; only a private LAN address in o= betrays a rewrite.
+            if conn and origin and not origin.is_loopback and is_private(m.sdp.origin_ip) and is_public(conn) and conn == m.src_ip:
                 alg_seen.add(src)
                 out.append(_finding("warning", "SIP_ALG_SDP_REWRITE", "SDP reescrito no caminho (provável SIP ALG)",
                                     f"O SDP de {src} tem o= com {m.sdp.origin_ip} (privado) mas c= com {conn} (o IP público do próprio pacote). "
@@ -126,21 +130,27 @@ def analyze_nat(messages: list[SipMessage], calls: list[SipCall], streams: list[
     for c in calls:
         cid = c.call_id
         public_sig = any(is_public(m.src_ip) or is_public(m.dst_ip) for m in c.messages)
-        private_eps = [ep for ep in c.media_endpoints if is_private(ep.get("ip"))]
+        # ICE (WebRTC) carries its own NAT traversal: private host candidates are expected there and judged by webrtc.py.
+        private_eps = [ep for ep in c.media_endpoints if is_private(ep.get("ip")) and not ep.get("ice")]
         cstreams = by_call.get(cid, [])
         directions = {(s.src_ip, s.dst_ip) for s in cstreams if s.packets >= 10}
         one_way = c.connected and bool(directions) and not any((b, a) in directions for a, b in directions)
         no_media = c.connected and not cstreams
-        if private_eps and public_sig:
+        both_ways = bool(directions) and not one_way
+        if private_eps and public_sig and c.connected:  # unanswered calls never carry media: the SDP cannot be the fault
             broken = one_way or no_media
-            out.append(_finding("critical" if broken else "warning", "NAT_PRIVATE_SDP", "IP privado no SDP numa chamada pela internet",
+            # Audio flowing both ways proves something (SBC, media relay, comedia) is already fixing it.
+            sev = "critical" if broken else "info" if both_ways else "warning"
+            out.append(_finding(sev, "NAT_PRIVATE_SDP", "IP privado no SDP numa chamada pela internet",
                                 f"O SDP anuncia {', '.join(sorted({ep['ip'] for ep in private_eps}))} para mídia, mas a sinalização passa por IP público. "
                                 + ("O resultado é áudio " + ("unidirecional" if one_way else "ausente") + ": o outro lado envia RTP para um endereço inalcançável. "
-                                   if broken else "Se não houver SBC/media relay corrigindo, o áudio falha. ")
+                                   if broken else "O áudio passou nos dois sentidos, então algo no caminho (SBC/NAT do PBX) está corrigindo. "
+                                   if both_ways else "Se não houver SBC/media relay corrigindo, o áudio falha. ")
                                 + "Correção: habilitar NAT/media latching (comedia) no SBC/PBX ou STUN/IP externo no aparelho.",
                                 c.caller_ip, cid, media_ips=sorted({ep["ip"] for ep in private_eps}), one_way_audio=one_way, no_media=no_media))
         advertised = {(ep.get("ip"), ep.get("port")) for ep in c.media_endpoints}
-        if len({ep.get("side") for ep in c.media_endpoints}) >= 2:
+        uses_ice = any(ep.get("ice") for ep in c.media_endpoints)  # ICE learns peer-reflexive addresses by design
+        if len({ep.get("side") for ep in c.media_endpoints}) >= 2 and not uses_ice:
             for s in cstreams:
                 if (s.src_ip, s.src_port) not in advertised and (s.dst_ip, s.dst_port) in advertised:
                     adv_same_ip = next((p for ip, p in advertised if ip == s.src_ip), None)
@@ -151,7 +161,7 @@ def analyze_nat(messages: list[SipMessage], calls: list[SipCall], streams: list[
                                         "onde o RTP chega (RTP simétrico/latching), senão o áudio fica mudo nessa direção.",
                                         s.src_ip, cid, stream=s.stream_id, observed=f"{s.src_ip}:{s.src_port}"))
                     break
-        if one_way and any(_behind_nat(m) for m in c.messages):
+        if one_way and any(m.is_request and _behind_nat(m) for m in c.messages):
             out.append(_finding("critical", "NAT_ONE_WAY_AUDIO", "Áudio unidirecional causado por NAT",
                                 "Chamada com áudio em só uma direção e aparelho atrás de NAT. Causa mais provável: o lado de fora envia RTP para o IP "
                                 "privado do SDP ou para uma porta que o NAT não abriu. Verifique SIP ALG, NAT/comedia no servidor e STUN no aparelho.",

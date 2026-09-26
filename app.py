@@ -91,8 +91,8 @@ cols[4].metric("ACD", fmt(kc.get("acd_s"), " s"))
 cols[5].metric("MOS médio", fmt(km.get("mos_avg")))
 cols[6].metric("Críticos", sum(1 for d in result.diagnostics if d.severity == "critical"))
 
-tabs = st.tabs(["Resumo", "Chamadas SIP", "RTP / Qualidade", "Registros", "Diagnósticos", "NAT", "DDoS / Flood", "Segurança SIP", "Rede"])
-summary, calls_tab, rtp_tab, reg_tab, diag_tab, nat_tab, ddos_tab, sec_tab, net_tab = tabs
+tabs = st.tabs(["Resumo", "Chamadas SIP", "RTP / Qualidade", "Registros", "Diagnósticos", "NAT", "DDoS / Flood", "WebRTC", "Segurança SIP", "Rede"])
+summary, calls_tab, rtp_tab, reg_tab, diag_tab, nat_tab, ddos_tab, webrtc_tab, sec_tab, net_tab = tabs
 
 with summary:
     c1, c2 = st.columns([2, 1])
@@ -206,6 +206,27 @@ with ddos_tab:
     if result.kpis.get("traffic_timeline"):
         st.subheader("Tráfego por segundo (pico)")
         st.line_chart(pd.DataFrame(result.kpis["traffic_timeline"]).set_index("t")[["pps"]])
+
+with webrtc_tab:
+    wr = result.webrtc or {}
+    for f in wr.get("findings", []):
+        st.markdown(f'<div class="sn-{f["severity"]}"><b>{f["title"]}</b><br>{f["detail"]}<br><small>{f["type"]} · sessão: {f.get("session") or "—"} · Call-ID: {f["call_id"] or "—"}</small></div>', unsafe_allow_html=True)
+    if wr.get("sessions"):
+        st.subheader("Sessões ICE / DTLS / SRTP")
+        st.dataframe(pd.DataFrame([{
+            "Sessão": x["session_id"], "Call-ID": x["call_id"], "ICE": x["ice_state"], "Par selecionado": x["selected_pair"],
+            "TURN": "sim" if x["relayed"] else "não", "DTLS": x["dtls"]["state"], "Direções de mídia": x["media_directions"],
+            "Início da mídia (ms)": x["setup_ms"], "Fluxos": ", ".join(x["media_streams"]),
+        } for x in wr["sessions"]]), use_container_width=True, hide_index=True)
+    if wr.get("websocket"):
+        st.subheader("SIP sobre WebSocket")
+        st.dataframe(pd.DataFrame([{k: v for k, v in c.items() if k not in ("close",)} | {"fechamento": (c["close"] or {}).get("code")}
+                                   for c in wr["websocket"]]), use_container_width=True, hide_index=True)
+    if wr.get("turn_servers") or wr.get("stun_servers"):
+        st.subheader("Servidores STUN/TURN")
+        st.dataframe(pd.DataFrame(wr.get("stun_servers", []) + wr.get("turn_servers", [])), use_container_width=True, hide_index=True)
+    if not wr.get("sessions") and not wr.get("websocket") and not wr.get("findings"):
+        st.info("Nenhum tráfego WebRTC na captura (SIP sobre WebSocket, STUN/ICE, TURN, DTLS ou SRTP).")
 
 with sec_tab:
     if result.security:

@@ -47,7 +47,7 @@ class NatTests(unittest.TestCase):
     def test_latching_fixes_audio_so_not_critical(self):
         r = analyze_bytes(pcap(nat_call(one_way=False)))
         self.assertNotIn("NAT_ONE_WAY_AUDIO", types(r.nat))
-        self.assertEqual(next(x for x in r.nat if x["type"] == "NAT_PRIVATE_SDP")["severity"], "warning")
+        self.assertEqual(next(x for x in r.nat if x["type"] == "NAT_PRIVATE_SDP")["severity"], "info")  # audio flowed both ways: something already fixes the NAT
 
     def test_rport_suppresses_warning(self):
         s = Sip("reg-1", PRIV, SRV)
@@ -151,7 +151,7 @@ class ChartTests(unittest.TestCase):
         self.assertTrue(all(d.category for d in r.diagnostics))
         self.assertEqual({x["label"] for x in ch["nat_by_type"]}, {f["title"] for f in r.nat})
         d = r.to_dict()
-        self.assertEqual(d["schema_version"], "2.2")
+        self.assertEqual(d["schema_version"], "2.3")
         self.assertIn("nat", d); self.assertIn("ddos", d)
         self.assertIn("category", d["diagnostics"][0])
 

@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.3.0
+
+### Adicionado
+
+- Análise WebRTC sem chaves (`webrtc.py`, `websocket.py`, saída `webrtc`): SIP sobre WebSocket entra no motor de chamadas
+  como transporte `WS`; sessões ICE por par de ice-ufrag com pares de candidatos, nomeação e consentimento; servidor STUN;
+  TURN (Allocate, falhas e mídia dentro de ChannelData/Send/Data); handshake DTLS com alertas e use_srtp; SRTP medido
+  pelo cabeçalho (perda, jitter, direção). 20 códigos `WEBRTC_*` e categoria `webrtc` nos diagnósticos e gráficos.
+- SDP: `a=ice-ufrag`, `a=fingerprint`, `a=setup`, `a=rtcp-mux` e candidatos ICE; m=video; endpoints de mídia por candidato.
+- `rtp_streams[]`: `media_kind`, `secure`, `codec_inferred` (Opus inferido por clock de 48 kHz), `webrtc_session`.
+- `IP_FRAGMENTS_LOST`: datagrama fragmentado com parte perdida (INVITE grande por UDP).
+- Laboratório de 87 pcaps sintéticos com gabarito (`tests/lab.py`, `tests/test_lab.py`, `tools/make_lab_pcaps.py`).
+- Aba WebRTC no Streamlit.
+
+### Corrigido (encontrado pelo laboratório)
+
+- Gaps de RTP durante espera (hold) viravam `RTP_GAP`; um salto de timestamp após pausa ou marker inflava o jitter.
+- `NAT_ONE_WAY_AUDIO` disparava em rede privada porque o Via das respostas era lido como se fosse do remetente.
+- `SIP_ALG_CONTENT_LENGTH` disparava em mensagem truncada/malformada e em INVITE fragmentado; `SIP_ALG_SDP_REWRITE`
+  disparava para todo navegador (o= 127.0.0.1).
+- `NAT_PRIVATE_SDP` em chamada não atendida, ou com áudio passando nos dois sentidos, deixou de ser alerta.
+- Cada INVITE/REGISTER de uma origem atacante (flood, varredura, força bruta, flood distribuído) gerava um diagnóstico
+  próprio; agora o ataque aparece uma vez, no alerta de segurança/DDoS.
+- Troca de SSRC contava áudio e vídeo do mesmo 5-tupla (BUNDLE) como troca.
+- RTCP de fluxos SRTP (blocos criptografados) não é mais lido como perda/jitter remotos.
+
+### Alterado
+
+- `schema_version` 2.3 (campos novos apenas).
+
 ## 2.2.0
 
 ### Adicionado

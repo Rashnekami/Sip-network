@@ -26,7 +26,7 @@ sip-network captura.pcap --no-messages --json saida.json
 sip-network captura.pcap --summary --fail-on critical   # exit 2 se houver crítico
 ```
 
-## Contrato do JSON (`schema_version` = "2.2")
+## Contrato do JSON (`schema_version` = "2.3")
 
 | Chave | Conteúdo |
 |---|---|
@@ -38,15 +38,16 @@ sip-network captura.pcap --summary --fail-on critical   # exit 2 se houver crít
 | `kpis.media` | MOS médio/mínimo, faixas de MOS, perda média, jitter p95, codecs, DSCP |
 | `kpis.registrations` | AORs, registrados, falhando, sem resposta, atraso médio de registro |
 | `kpis.icmp_errors` | ICMP destino/porta inalcançável associado ao fluxo original |
-| `kpis.charts` | séries prontas para gráficos de rosca/pizza, cada item `{key, label, value}`: `diagnostics_by_severity`, `diagnostics_by_category`, `problems_by_category` (sem info), `call_outcomes`, `sip_error_codes`, `mos_bands`, `security_by_type`, `nat_by_type`, `ddos_by_type` |
+| `kpis.charts` | séries prontas para gráficos de rosca/pizza, cada item `{key, label, value}`: `diagnostics_by_severity`, `diagnostics_by_category`, `problems_by_category` (sem info), `call_outcomes`, `sip_error_codes`, `mos_bands`, `security_by_type`, `nat_by_type`, `ddos_by_type`, `webrtc_by_type` |
 | `kpis.traffic_timeline` | pico de pacotes/s e Mbit/s por segundo da captura (até 120 pontos), para gráfico de linha |
 | `calls[]` | uma por Call-ID com INVITE: `outcome`, `final_status`, `q850_cause`, `pdd_ms`, `setup_time_ms`, `duration_s`, `disconnect_side`, `dialogs`, `hold_events`, `transfers`, `media_endpoints`, `messages`… |
-| `rtp_streams[]` | um por direção+SSRC: perda, jitter, MOS, R-factor, RTCP remoto, DSCP, gaps, DTMF… |
+| `rtp_streams[]` | um por direção+SSRC: perda, jitter, MOS, R-factor, RTCP remoto, DSCP, gaps, DTMF, `media_kind` (audio/video), `secure` (SRTP), `codec_inferred`, `webrtc_session`… |
 | `registrations[]` | um por AOR+origem: estado, tentativas, desafios, senha recusada, expires |
-| `diagnostics[]` | `severity` (critical/warning/info), `code`, `title`, `detail`, `confidence`, `call_id`, `stream_id`, `evidence`, `category` (`sinalizacao`, `midia`, `nat`, `seguranca`, `ddos`, `rede`, `registro`) |
+| `diagnostics[]` | `severity` (critical/warning/info), `code`, `title`, `detail`, `confidence`, `call_id`, `stream_id`, `evidence`, `category` (`sinalizacao`, `midia`, `nat`, `seguranca`, `ddos`, `rede`, `registro`, `webrtc`) |
 | `security[]` | alertas de ataque/fraude com `type`, `source_ip` e evidências |
 | `nat[]` | achados de NAT: `severity`, `type`, `title`, `detail`, `source_ip`, `call_id`, `evidence` |
 | `ddos[]` | eventos de flood/DDoS: `type`, `severity`, `title`, `target_ip`, `target_port`, `start`, `end`, `duration_s`, `peak_pps`, `avg_pps`, `peak_mbps`, `sources`, `top_sources[]`, `detail` |
+| `webrtc` | `sessions[]` (uma por par de ice-ufrag: `ice_state` connected/failed/checking, `candidate_pairs[]`, `selected_pair`, `relayed`, `dtls.state` connected/no_answer/incomplete/failed/not_seen, `media_streams`, `media_directions`, `setup_ms`, `call_id`), `findings[]` (mesmo formato de `nat[]` + `session`), `websocket[]` (conexões SIP-WebSocket: `client`, `server`, `http_status`, `sip_messages`, `close`), `stun_servers[]`, `turn_servers[]`, `wss_servers` |
 | `network_flows[]` | fluxos L3/L4 com pacotes, bytes, gaps e RST |
 
 Valores de `outcome`: `answered`, `busy`, `no_answer`, `cancelled`, `rejected`, `not_found`, `auth_failed`, `media_negotiation_failed`, `server_error`, `timeout`, `no_response`, `redirected`, `client_error`, `global_failure`, `in_progress`, `unknown`.
